@@ -12,3 +12,4 @@ typora-uploader/target/
 
 # uv 缓存
 .uv-cache/
+*.log
