@@ -35,5 +35,5 @@ uv run pyinstaller MarkdownUtil.spec
 或者直接用命令行（效果等同）：
 
 ```shell
-uv run pyinstaller --onefile --noconsole --name MarkdownUtil --hidden-import server.meta_db --hidden-import server.media_server --hidden-import tabs.file_browser --hidden-import tabs.media_server_tab --hidden-import tabs.space_fix --hidden-import tabs.image_check --hidden-import tabs.migrate --hidden-import utils --collect-all libmarkdown --collect-all mistletoe --collect-all PIL --collect-all pystray main.py
+uv run pyinstaller --onefile --noconsole --name MarkdownUtil --hidden-import server.meta_db --hidden-import server.media_server --hidden-import server.notes_db --hidden-import tabs.file_browser --hidden-import tabs.media_server_tab --hidden-import tabs.space_fix --hidden-import tabs.image_check --hidden-import tabs.migrate --hidden-import tabs.notes_browser --collect-all libmarkdown --collect-all mistletoe --collect-all PIL --collect-all pystray --collect-all watchdog main.py
 ```

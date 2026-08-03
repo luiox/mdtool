@@ -10,6 +10,7 @@ from tabs.media_server_tab import MediaServerTab
 from tabs.space_fix import SpaceFixTab
 from tabs.image_check import ImageCheckTab
 from tabs.migrate import MigrateTab
+from tabs.notes_browser import NotesBrowserTab
 
 
 def _make_tray_icon():
@@ -46,6 +47,11 @@ class MarkdownToolApp:
     def _stop_server(self):
         try:
             self.tab2.server.stop()
+        except Exception:
+            pass
+        # Flush dirty notes and stop the watchdog observer.
+        try:
+            self.tab0.shutdown()
         except Exception:
             pass
 
@@ -129,12 +135,14 @@ class MarkdownToolApp:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
+        self.tab0 = NotesBrowserTab(self.notebook, self)
         self.tab1 = FileBrowserTab(self.notebook, self)
         self.tab2 = MediaServerTab(self.notebook, self)
         self.tab3 = SpaceFixTab(self.notebook, self)
         self.tab4 = ImageCheckTab(self.notebook, self)
         self.tab5 = MigrateTab(self.notebook, self)
 
+        self.notebook.add(self.tab0.frame, text="笔记库")
         self.notebook.add(self.tab1.frame, text="文件浏览器")
         self.notebook.add(self.tab2.frame, text="本地媒体服务器")
         self.notebook.add(self.tab3.frame, text="空格转下划线修复")
@@ -149,6 +157,7 @@ class MarkdownToolApp:
             self.on_root_dir_changed()
 
     def on_root_dir_changed(self):
+        self.tab0.on_root_dir_changed()
         self.tab1.on_root_dir_changed()
         self.tab2.on_root_dir_changed()
         self.tab3.on_root_dir_changed()

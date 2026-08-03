@@ -301,5 +301,5 @@ class FileBrowserTab:
         if path is None:
             return
         self.app.pending_migrate_md = path
-        self.app.notebook.select(4)
+        self.app.notebook.select(self.app.tab5.frame)
         self.app.tab5.load_file(path)
