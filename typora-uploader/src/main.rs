@@ -13,6 +13,12 @@ fn main() {
         std::process::exit(1);
     }
 
+    // --version / -V: 输出版本号（从 Cargo.toml 编译期注入，无需手动维护）。
+    if args[1] == "--version" || args[1] == "-V" {
+        println!("typora-uploader {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let server = env::var("TYPORA_SERVER_URL")
         .unwrap_or_else(|_| DEFAULT_SERVER.to_string())
         .trim_end_matches('/')

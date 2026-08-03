@@ -1,0 +1,70 @@
+name: Release
+
+# tag 驱动发布：push 形如 v1.2.3 的 tag → 自动构建两个 exe → 创建 GitHub Release。
+# 发版流程：python scripts/version.py bump <level> → git tag vX.Y.Z → git push origin vX.Y.Z
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # 创建 Release、上传 asset 必需
+
+jobs:
+  build-and-release:
+    name: 构建并发布 Windows exe
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 从 tag 提取版本号
+        id: ver
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "提取版本: $TAG"
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: typora-uploader
+
+      - name: 同步版本号到所有子项目
+        shell: bash
+        run: |
+          # 用 uv 装的 python 跑脚本（CI 上 python 可能不在 PATH）
+          uv run --no-project python scripts/version.py set "${{ steps.ver.outputs.version }}"
+
+      - name: 打包两个 exe
+        shell: bash
+        run: |
+          uv run --no-project python scripts/build.py
+
+      - name: 上传构建产物（artifact，便于调试下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdtool-${{ steps.ver.outputs.version }}
+          path: |
+            dist/MarkdownUtilQt.exe
+            dist/typora-uploader.exe
+          if-no-files-found: error
+
+      - name: 创建 GitHub Release 并挂载 exe
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true   # GitHub 自动生成 "What's Changed"
+          files: |
+            dist/MarkdownUtilQt.exe
+            dist/typora-uploader.exe

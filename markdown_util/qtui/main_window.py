@@ -28,12 +28,13 @@ from PySide6.QtWidgets import (
 
 from qtui.icons import tray_icon
 from qtui.widgets import BaseTab
+from _version import get_version
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Markdown 工具集")
+        self.setWindowTitle(f"Markdown 工具集 v{get_version()}")
         self.resize(1100, 750)
         self._closing = False
         self._tray = None

@@ -1,0 +1,72 @@
+name: CI
+
+# 日常检查：push / PR 触发，只做快速导入冒烟 + Rust 检查，不打包。
+# 打包发布走 release.yml（tag 驱动）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-check:
+    name: markdown_util 导入冒烟
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: markdown_util
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: 安装依赖（含本地 libmarkdown）
+        run: |
+          uv sync
+          uv sync --extra ast
+
+      - name: 导入冒烟测试（qtui + server 全部模块可导入）
+        run: |
+          uv run python -c "import sys; sys.path.insert(0,'.'); import qtui.main_window, qtui.widgets, qtui.icons, qtui.workers; import qtui.tabs.notes_browser, qtui.tabs.file_browser, qtui.tabs.media_server, qtui.tabs.space_fix, qtui.tabs.image_check, qtui.tabs.migrate; import server.notes_db, server.meta_db, server.media_server, utils; print('imports OK')"
+
+      - name: boot 冒烟（QApplication 下构造 MainWindow + 图标渲染 + shutdown）
+        run: |
+          uv run python -c "import sys; sys.path.insert(0,'.'); from PySide6.QtWidgets import QApplication; app=QApplication(sys.argv); from qtui.main_window import MainWindow; w=MainWindow(); assert w.tabs.count()==6; from qtui.icons import folder_icon, file_icon, tray_icon; folder_icon(); file_icon(); tray_icon(); [t.shutdown() for t in w._all_tabs()]; print('boot OK')"
+
+  libmarkdown-test:
+    name: libmarkdown 单元测试
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: libmarkdown
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: 安装依赖
+        run: uv sync
+      - name: 运行测试
+        run: uv run pytest -q
+
+  rust-check:
+    name: typora-uploader cargo check
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: typora-uploader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: typora-uploader
+      - name: cargo check
+        run: cargo check --release

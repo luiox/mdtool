@@ -1,2 +1,14 @@
 *.pyc
 .zcode/
+
+# 打包产物
+dist/
+build/
+markdown_util/build/
+markdown_util/dist/
+
+# Rust
+typora-uploader/target/
+
+# uv 缓存
+.uv-cache/

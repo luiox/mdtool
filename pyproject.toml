@@ -1,0 +1,9 @@
+[project]
+name = "mdtool"
+version = "0.2.0"
+description = "Markdown 笔记工具集（monorepo：markdown_util + libmarkdown + typora-uploader）"
+requires-python = ">=3.11"
+
+# 这是 monorepo 的版本权威来源（single source of truth）。所有子项目的版本
+# 由 scripts/version.py sync 从这里同步过去，请勿手动改子项目的版本号。
+# 发版流程：scripts/version.py bump <level> → git tag vX.Y.Z → git push → CI 自动发布
