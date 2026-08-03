@@ -28,12 +28,21 @@ typora-uploader是对应给typora上传给本地图床用的工具
 
 打包构建单exe
 
+有两个入口：
+
+- `main.py` — 旧 tkinter 版（高 DPI 下模糊，保留作为回退）
+- `main_qt.py` — PySide6 版（推荐，高 DPI 清晰）
+
+打包推荐用 Qt 版入口：
+
 ```shell
-uv run pyinstaller MarkdownUtil.spec
+uv run pyinstaller MarkdownUtilQt.spec
 ```
 
 或者直接用命令行（效果等同）：
 
 ```shell
-uv run pyinstaller --onefile --noconsole --name MarkdownUtil --hidden-import server.meta_db --hidden-import server.media_server --hidden-import server.notes_db --hidden-import tabs.file_browser --hidden-import tabs.media_server_tab --hidden-import tabs.space_fix --hidden-import tabs.image_check --hidden-import tabs.migrate --hidden-import tabs.notes_browser --collect-all libmarkdown --collect-all mistletoe --collect-all PIL --collect-all pystray --collect-all watchdog main.py
+uv run pyinstaller --onefile --noconsole --name MarkdownUtilQt --hidden-import server.meta_db --hidden-import server.media_server --hidden-import server.notes_db --hidden-import qtui.main_window --hidden-import qtui.widgets --hidden-import qtui.icons --hidden-import qtui.workers --hidden-import qtui.tabs.notes_browser --hidden-import qtui.tabs.file_browser --hidden-import qtui.tabs.media_server --hidden-import qtui.tabs.space_fix --hidden-import qtui.tabs.image_check --hidden-import qtui.tabs.migrate --collect-all libmarkdown --collect-all mistletoe --collect-all PIL --collect-all watchdog --collect-all PySide6 main_qt.py
 ```
+
+如需打包旧 tkinter 版，把最后的 `main_qt.py` 换成 `main.py` 并按需调整 `--collect-all`。

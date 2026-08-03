@@ -77,27 +77,42 @@ class MainWindow(QMainWindow):
     # ── tabs ──
 
     def _build_tabs(self):
-        # Imported lazily so a half-migrated tree can still boot with only the
-        # finished tabs present.
         from qtui.tabs.notes_browser import NotesBrowserTab
+        from qtui.tabs.file_browser import FileBrowserTab
+        from qtui.tabs.media_server import MediaServerTab
+        from qtui.tabs.space_fix import SpaceFixTab
+        from qtui.tabs.image_check import ImageCheckTab
+        from qtui.tabs.migrate import MigrateTab
+
         self.tab_notes = NotesBrowserTab()
+        self.tab_files = FileBrowserTab()
+        self.tab_media = MediaServerTab()
+        self.tab_space = SpaceFixTab()
+        self.tab_check = ImageCheckTab()
+        self.tab_migrate = MigrateTab()
+
+        # Inject back-references so tabs can reach siblings (e.g. file browser
+        # → migrate) and the main window without import cycles.
+        for t in self._all_tabs():
+            t.main_window = self
 
         self.tabs = QTabWidget(self)
         self.tabs.addTab(self.tab_notes, "笔记库")
-
-        # The remaining tabs are added as they are migrated. Until then we add
-        # lightweight placeholders so the layout/order matches the plan and
-        # the user sees what's coming.
-        self._placeholders: dict[str, BaseTab] = {}
-        for name in ["文件浏览器", "本地媒体服务器", "空格转下划线修复", "图片校验", "图片迁移"]:
-            ph = _PlaceholderTab(f"「{name}」尚未迁移到 Qt（仍可用旧入口 main.py）")
-            self.tabs.addTab(ph, name)
-            self._placeholders[name] = ph
-
+        self.tabs.addTab(self.tab_files, "文件浏览器")
+        self.tabs.addTab(self.tab_media, "本地媒体服务器")
+        self.tabs.addTab(self.tab_space, "空格转下划线修复")
+        self.tabs.addTab(self.tab_check, "图片校验")
+        self.tabs.addTab(self.tab_migrate, "图片迁移")
         self.setCentralWidget(self.tabs)
 
     def _all_tabs(self):
-        return [self.tab_notes]
+        return [self.tab_notes, self.tab_files, self.tab_media,
+                self.tab_space, self.tab_check, self.tab_migrate]
+
+    def open_migrate(self, path):
+        """Hand off a file/dir to the Migrate tab (called by the file browser)."""
+        self.tabs.setCurrentWidget(self.tab_migrate)
+        self.tab_migrate.load_file(path)
 
     # ── tray ──
 
