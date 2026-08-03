@@ -28,6 +28,14 @@ MD = ROOT / "markdown_util"
 UPLOADER = ROOT / "typora-uploader"
 DIST = ROOT / "dist"
 
+def _setup_utf8_stdio() -> None:
+    """Windows runner（默认 cp1252）下打印中文会 UnicodeEncodeError，强制 UTF-8 输出。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 
 def run(cmd: list[str], cwd: Path, **kw) -> None:
     """运行命令，失败时抛异常带完整输出。"""
@@ -155,6 +163,7 @@ def human_size(n: int) -> str:
 
 
 def main(argv: list[str]) -> int:
+    _setup_utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--onedir", action="store_true", help="用 onedir 模式（默认 onefile）")
     ap.add_argument("--skip-rust", action="store_true", help="跳过 typora-uploader")

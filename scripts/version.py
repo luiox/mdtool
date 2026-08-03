@@ -31,6 +31,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 ROOT_PYPROJECT = ROOT / "pyproject.toml"
 
+def _setup_utf8_stdio() -> None:
+    """Windows runner（默认 cp1252）下打印中文会 UnicodeEncodeError，强制 UTF-8 输出。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 # 子项目版本写入位置（文件, 字段名, 匹配正则）。正则里用 {ver} 占位。
 SUBPROJECTS = [
     {
@@ -114,6 +122,7 @@ def sync_to_subprojects(major: int, minor: int, patch: int) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
+    _setup_utf8_stdio()
     if len(argv) < 2:
         print(__doc__)
         return 1
