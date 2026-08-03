@@ -1,6 +1,6 @@
 [project]
 name = "libmarkdown"
-version = "0.2.0"
+version = "0.2.1"
 description = "An idempotent Markdown read-write library with AST manipulation"
 readme = "README.md"
 authors = [
