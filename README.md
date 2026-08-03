@@ -24,10 +24,10 @@
 
 完整规范见 [`markdown_util/图片和附件管理规范.md`](markdown_util/图片和附件管理规范.md)，要点：
 
-- 本地图床服务器固定监听 `127.0.0.1:8765`（与 Typora 约定一致）。
+- 本地图床服务器默认监听 `127.0.0.1:8765`（与 Typora 约定一致，可在应用内调整端口）。
 - 媒体根目录下**扁平化**存放：`images/`（图片）、`assets/`（附件）、`meta.db`（SQLite 元信息：原始文件名、大小、MIME、上传时间）。
 - 图片链接格式：`![img](http://127.0.0.1:8765/images/image-YYYYMMDDHHMMSSnnn.png)`；附件链接：`http://127.0.0.1:8765/assets/YYYYMMDDHHMMSSnnn.pdf`（下载时按原始文件名回传）。
-- 图片由 Typora 调用 `typora-uploader` 上传；图片/附件也都可以在应用内直接上传、按名称（支持正则）查询，并支持 GC 清理“文件已丢失”的数据库记录。
+- 图片由 Typora 调用 `typora-uploader` 上传；图片/附件也可以在应用内直接上传、按名称模糊查询（笔记库支持正则搜索），并支持 GC 清理“文件已丢失”的数据库记录。
 
 ## 笔记的两种模式
 
@@ -59,9 +59,10 @@ uv run python main_qt.py
 1. 启动应用 → “本地媒体服务器”标签页 → 设置媒体根目录 → “启动服务器”。
 2. Typora 偏好设置 → 图像 → 上传服务 → 自定义命令，填：
    ```
-   C:\sw\mdtool\typora-uploader\target\release\typora-uploader.exe
+   path/to/typora-uploader
    ```
-   （或直接编辑 `%APPDATA%\Typora\conf\conf.user.json`，写 `"imageUploader": "custom"` 与 `"customImageUploader": "<exe路径>"`。）
+   按你本机的编译产物实际路径填写（Windows 下例如 `D:\mdtool\typora-uploader\target\release\typora-uploader.exe`）。
+也可以直接编辑 `%APPDATA%\Typora\conf\conf.user.json`，写 `"imageUploader": "custom"` 与 `"customImageUploader": "<exe路径>"`。
 3. 想让“插入图片即上传”，Typora 偏好设置 → 图像 → 插入图片时 → 选择“上传图片”。
 
 ## 打包
