@@ -2,6 +2,8 @@ package com.mdtool.reader
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.WebView
@@ -11,9 +13,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,9 +28,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,15 +47,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.documentfile.provider.DocumentFile
 import com.mdtool.reader.kb.KbRepository
 import com.mdtool.reader.kb.KbRepository.SearchHit
 import com.mdtool.reader.render.MarkdownRenderer
@@ -64,11 +71,16 @@ class MainActivity : ComponentActivity() {
     private var server: LocalServer? = null
     internal var serverError: String? = null
 
+    /** 系统当前是否暗色模式（Activity 随 uiMode 变化重建，服务随之带上新配色）。 */
+    internal fun isDarkMode(): Boolean =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
     internal fun startServer(repo: KbRepository) {
         // 切换知识库时重启服务器，避免旧服务器继续指向旧根目录
         server?.stop()
         server = null
-        val s = LocalServer(repo, MarkdownRenderer(), applicationContext.contentResolver)
+        val s = LocalServer(repo, MarkdownRenderer(isDark = isDarkMode()), applicationContext.contentResolver)
         try {
             s.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
             server = s
@@ -106,13 +118,15 @@ private fun App(activity: MainActivity) {
     var repo by remember {
         mutableStateOf(
             rootUriString?.let {
-                DocumentFile.fromTreeUri(context, Uri.parse(it))?.let { doc -> KbRepository(context, doc) }
+                runCatching { KbRepository(context, Uri.parse(it)) }.getOrNull()
             }
         )
     }
-    var screen by remember { mutableStateOf(Screen.Home) }
-    var currentFolder by remember { mutableStateOf("") }
-    var openNotePath by remember { mutableStateOf<String?>(null) }
+    // rememberSaveable：系统切换昼夜模式会重建 Activity，保住浏览位置
+    var screen by rememberSaveable { mutableStateOf(Screen.Home) }
+    var currentFolder by rememberSaveable { mutableStateOf("") }
+    var openNotePath by rememberSaveable { mutableStateOf<String?>(null) }
+    var refreshKey by remember { mutableIntStateOf(0) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -127,7 +141,7 @@ private fun App(activity: MainActivity) {
             }
             prefs.edit().putString("kb_uri", uri.toString()).apply()
             rootUriString = uri.toString()
-            repo = DocumentFile.fromTreeUri(context, uri)?.let { KbRepository(context, it) }
+            repo = runCatching { KbRepository(context, uri) }.getOrNull()
             currentFolder = ""
             screen = Screen.Home
         }
@@ -156,6 +170,7 @@ private fun App(activity: MainActivity) {
                 else -> HomeScreen(
                     repo = repo!!,
                     currentFolder = currentFolder,
+                    refreshKey = refreshKey,
                     onFolder = { currentFolder = it },
                     onOpenNote = { path ->
                         openNotePath = path
@@ -163,6 +178,10 @@ private fun App(activity: MainActivity) {
                     },
                     onSearch = { screen = Screen.Search },
                     onChangeRoot = { picker.launch(null) },
+                    onRefresh = {
+                        repo!!.refresh()
+                        refreshKey++
+                    },
                     serverError = activity.serverError,
                 )
             }
@@ -196,21 +215,23 @@ private fun PlaceholderScreen(onPick: () -> Unit) {
 private fun HomeScreen(
     repo: KbRepository,
     currentFolder: String,
+    refreshKey: Int,
     onFolder: (String) -> Unit,
     onOpenNote: (String) -> Unit,
     onSearch: () -> Unit,
     onChangeRoot: () -> Unit,
+    onRefresh: () -> Unit,
     serverError: String?,
 ) {
-    var folders by remember(currentFolder) { mutableStateOf<List<KbRepository.Folder>>(emptyList()) }
-    var notes by remember(currentFolder) { mutableStateOf<List<KbRepository.Note>>(emptyList()) }
-    var loading by remember(currentFolder) { mutableStateOf(true) }
+    var folders by remember(currentFolder, refreshKey) { mutableStateOf<List<KbRepository.Folder>>(emptyList()) }
+    var notes by remember(currentFolder, refreshKey) { mutableStateOf<List<KbRepository.Note>>(emptyList()) }
+    var loading by remember(currentFolder, refreshKey) { mutableStateOf(true) }
 
-    LaunchedEffect(currentFolder) {
+    LaunchedEffect(currentFolder, refreshKey) {
         loading = true
-        val (f, n) = withContext(Dispatchers.IO) { repo.listFolders(currentFolder) to repo.listNotes(currentFolder) }
-        folders = f
-        notes = n
+        val listing = withContext(Dispatchers.IO) { repo.listDir(currentFolder) }
+        folders = listing.folders
+        notes = listing.notes
         loading = false
     }
 
@@ -237,6 +258,7 @@ private fun HomeScreen(
                 },
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, "搜索") }
+                    IconButton(onClick = onRefresh) { Icon(Icons.Filled.Refresh, "刷新") }
                     IconButton(onClick = onChangeRoot) { Icon(Icons.Filled.FolderOpen, "更换知识库") }
                 },
             )
@@ -297,12 +319,24 @@ private fun SearchScreen(
     var results by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var searchRequest by remember { mutableStateOf<String?>(null) }
-    var searchSeq by remember { mutableStateOf(0) }
+    var searchSeq by remember { mutableIntStateOf(0) }
+    var scope by remember { mutableStateOf(KbRepository.SearchScope.BOTH) }
+    var scanned by remember { mutableIntStateOf(0) }
+    var hitCount by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(searchSeq) {
+    // searchSeq/scope 变化即取消旧搜索（协程重启，walk 内 ensureActive 响应）
+    LaunchedEffect(searchSeq, scope) {
         val q = searchRequest ?: return@LaunchedEffect
         searching = true
-        results = withContext(Dispatchers.IO) { repo.search(q, "both") }
+        scanned = 0
+        hitCount = 0
+        val r = withContext(Dispatchers.IO) {
+            repo.search(q, scope) { s, h ->
+                scanned = s
+                hitCount = h
+            }
+        }
+        results = r
         searching = false
     }
 
@@ -313,7 +347,7 @@ private fun SearchScreen(
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it },
-                        placeholder = { Text("搜索（支持正则）") },
+                        placeholder = { Text("搜索文件名与内容（正则）") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -333,32 +367,65 @@ private fun SearchScreen(
             )
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-                results.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        if (searchRequest == null) "输入关键词开始搜索"
-                        else "无结果",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                else -> LazyColumn {
-                    items(results, key = { it.rel }) { hit ->
-                        Column(Modifier.clickable { onOpen(hit.rel) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                            Text(hit.rel, style = MaterialTheme.typography.titleSmall)
-                            if (hit.title.isNotEmpty()) {
-                                Text(hit.title, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary)
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                FilterChip(
+                    selected = scope == KbRepository.SearchScope.BOTH,
+                    onClick = { scope = KbRepository.SearchScope.BOTH },
+                    label = { Text("全部") },
+                )
+                FilterChip(
+                    selected = scope == KbRepository.SearchScope.NAME,
+                    onClick = { scope = KbRepository.SearchScope.NAME },
+                    label = { Text("文件名") },
+                )
+                FilterChip(
+                    selected = scope == KbRepository.SearchScope.BODY,
+                    onClick = { scope = KbRepository.SearchScope.BODY },
+                    label = { Text("内容") },
+                )
+            }
+            Box(Modifier.fillMaxSize()) {
+                when {
+                    searching -> Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        CircularProgressIndicator()
+                        Text(
+                            "已扫描 $scanned 篇 · 命中 $hitCount",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                    }
+                    results.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            if (searchRequest == null) "输入关键词开始搜索"
+                            else "无结果",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> LazyColumn {
+                        items(results, key = { it.rel }) { hit ->
+                            Column(Modifier.clickable { onOpen(hit.rel) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                                Text(hit.rel, style = MaterialTheme.typography.titleSmall)
+                                if (hit.title.isNotEmpty()) {
+                                    Text(hit.title, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary)
+                                }
+                                if (hit.snippet.isNotEmpty() && hit.snippet != hit.title) {
+                                    Text(hit.snippet, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                                }
                             }
-                            if (hit.snippet.isNotEmpty() && hit.snippet != hit.title) {
-                                Text(hit.snippet, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-                            }
+                            HorizontalDivider()
                         }
-                        HorizontalDivider()
                     }
                 }
             }
@@ -374,6 +441,7 @@ private fun ReaderScreen(notePath: String, onBack: () -> Unit) {
     val url = remember(notePath) {
         "http://127.0.0.1:${LocalServer.PORT}/note/${LocalServer.urlEncodePath(notePath)}"
     }
+    val isDark = isSystemInDarkTheme()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -388,6 +456,7 @@ private fun ReaderScreen(notePath: String, onBack: () -> Unit) {
             factory = { ctx ->
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = false
+                    setBackgroundColor(Color.parseColor(MarkdownRenderer.pageBackgroundHex(isDark)))
                     webViewClient = WebViewClient()
                 }
             },

@@ -4,9 +4,9 @@ package com.mdtool.reader.resolver
  * 媒体链接解析与改写 — 与 markdown_util/link_resolver.py 同一语义（docs/知识库规范.md §2）。
  *
  * 手机端固定监听 127.0.0.1:8765（与桌面一致），因此笔记里存储的
- * `http://127.0.0.1:8765/images/...` 在手机上原样可解析（零改写）；
- * 仅当笔记中 host/port 与本地不一致（如自定义端口）时改写为本地地址。
- * 非本知识库 URL（外链）一律原样透传。
+ * `http://127.0.0.1:8765/images/...` 在手机上原样可解析（零改写）。
+ * 身份判定 = host:port 完全一致；其余（外链、自定义端口的本机链接）一律原样透传，
+ * 绝不改动——自定义端口场景 v1 不支持（无服务器地址配置）。
  */
 object LinkResolver {
     const val DEFAULT_HOST = "127.0.0.1"

@@ -74,10 +74,10 @@ class LocalServer(
     }
 
     private fun serveMedia(category: String, name: String): Response {
-        val doc = repo.mediaFile(category, name)
+        val uri = repo.mediaUri(category, name)
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
         val input = try {
-            contentResolver.openInputStream(doc.uri)
+            contentResolver.openInputStream(uri)
         } catch (e: Exception) {
             null
         } ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
@@ -118,6 +118,7 @@ class LocalServer(
         "webp" -> "image/webp"
         "svg" -> "image/svg+xml"
         "bmp" -> "image/bmp"
+        "heic", "heif" -> "image/heic"
         "pdf" -> "application/pdf"
         "zip" -> "application/zip"
         "drawio", "xml" -> "application/xml"
