@@ -34,8 +34,7 @@ hiddenimports = [
 ]
 
 # Collect data/binaries/hiddenimports for the heavy third-party packages.
-for pkg in ('libmarkdown', 'mistletoe', 'PIL', 'pystray', 'watchdog',
-            'PySide6', 'shiboken6'):
+for pkg in ('libmarkdown', 'watchdog', 'PySide6', 'shiboken6'):
     tmp = collect_all(pkg)
     datas += tmp[0]
     binaries += tmp[1]

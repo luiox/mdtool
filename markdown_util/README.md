@@ -1,48 +1,37 @@
 # markdown_util
 
-markdown图片链接相关的工具
+PySide6 桌面应用：**知识库管理器 + Markdown 工具集**。入口 `main_qt.py`。
 
-1. markdown视图打包导出独立zip
-基础功能，按照我的这个规范的可以直接导出zip
-拓展功能，智能分析markdown图片链接，自动修整链接后导出zip
+## 功能
 
-2. 图片链接验证器
-验证图片链接是否有效
+- **知识库**（主流程）
+  - 双模式：db 容器（"内存态"，临时落地 + watchdog 回写）/ 散装文件夹，支持互相导入导出
+  - 正则全文搜索
+  - 导出：单篇/多篇 ZIP（markdown + 图片）、db 格式、导出为文件夹
+- **维护工具**：本地媒体服务器（图片/附件托管 + meta.db + GC）、图片校验（AST/正则）、图片迁移、空格转下划线修复
 
-3. 图片搜索整理器
-在特定目录内找出链接的图片，并且按照所需链接组织为文件夹格式
+## 运行
 
-4. 链接规整器
-
-主要是我需要一个规整器，就是把这个规整链接的功能直接放进我的这个markdown图片工具，这样子我就可以肆无忌惮随便从其他地方复制粘贴进typora而且图片是UUID这种也能自动规则回来
-
-智能图片链接管理，这样子我仅需偶尔gc一下，自动搜索失效的图片，链接失去图片，这样子很容易就能解决问题，彻底避免丢图片，图片垃圾的问题
-
-typora-uploader是对应给typora上传给本地图床用的工具
-
-
-未来功能规划
-
-导出器增加对本地图床服务器链接的支持，支持单个markdown导出zip，也支持批量多个导出zip包。
-
-
-打包构建单exe
-
-有两个入口：
-
-- `main.py` — 旧 tkinter 版（高 DPI 下模糊，保留作为回退）
-- `main_qt.py` — PySide6 版（推荐，高 DPI 清晰）
-
-打包推荐用 Qt 版入口：
-
-```shell
-uv run pyinstaller MarkdownUtilQt.spec
+```powershell
+uv sync --extra ast
+uv run python main_qt.py
 ```
 
-或者直接用命令行（效果等同）：
+## 打包
 
-```shell
-uv run pyinstaller --onefile --noconsole --name MarkdownUtilQt --hidden-import server.meta_db --hidden-import server.media_server --hidden-import server.notes_db --hidden-import qtui.main_window --hidden-import qtui.widgets --hidden-import qtui.icons --hidden-import qtui.workers --hidden-import qtui.tabs.notes_browser --hidden-import qtui.tabs.file_browser --hidden-import qtui.tabs.media_server --hidden-import qtui.tabs.space_fix --hidden-import qtui.tabs.image_check --hidden-import qtui.tabs.migrate --collect-all libmarkdown --collect-all mistletoe --collect-all PIL --collect-all watchdog --collect-all PySide6 main_qt.py
+```powershell
+uv run pyinstaller MarkdownUtilQt.spec   # 或统一走仓库根目录的 scripts/build.py
 ```
 
-如需打包旧 tkinter 版，把最后的 `main_qt.py` 换成 `main.py` 并按需调整 `--collect-all`。
+详细文档见仓库根 [`README.md`](../README.md) 与 [`docs/`](../docs/)。
+
+## 目录结构
+
+```
+markdown_util/
+├── main_qt.py           # 入口（PySide6）
+├── qtui/                # Qt UI 层（main_window / widgets / workers / icons / tabs）
+├── server/              # 后端：media_server（HTTP 图床）/ meta_db / notes_db
+├── utils.py             # 共享工具（图片链接提取、路径解析、命名生成）
+└── 图片和附件管理规范.md # 图床链接与元信息规范
+```
