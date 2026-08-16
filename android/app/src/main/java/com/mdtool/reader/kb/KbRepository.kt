@@ -34,8 +34,16 @@ class KbRepository(private val context: Context, private val rootDoc: DocumentFi
 
     companion object {
         private const val TAG = "KbRepository"
-        private const val MEDIA_DIRS = setOf("images", "assets")
+        private val MEDIA_DIRS = setOf("images", "assets")
     }
+
+    /** DocumentFile 没有 openInputStream()，统一走 ContentResolver。 */
+    private fun openStream(doc: DocumentFile): java.io.InputStream? =
+        try {
+            context.contentResolver.openInputStream(doc.uri)
+        } catch (e: Exception) {
+            null
+        }
 
     fun notesRoot(): DocumentFile = rootDoc.findFile("notes") ?: rootDoc
 
@@ -65,7 +73,7 @@ class KbRepository(private val context: Context, private val rootDoc: DocumentFi
 
     suspend fun readNote(note: Note): String = withContext(Dispatchers.IO) {
         try {
-            note.doc.openInputStream()?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+            openStream(note.doc)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
         } catch (e: Exception) {
             Log.w(TAG, "读取笔记失败: ${note.path}", e)
             ""
@@ -101,7 +109,7 @@ class KbRepository(private val context: Context, private val rootDoc: DocumentFi
         try {
             val dbDoc = rootDoc.findFile("meta.db") ?: return null
             val tmp = File(context.cacheDir, "kb_meta.db")
-            dbDoc.openInputStream()?.use { input ->
+            openStream(dbDoc)?.use { input ->
                 tmp.outputStream().use { output -> input.copyTo(output) }
             }
             val db = SQLiteDatabase.openDatabase(tmp.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
@@ -152,7 +160,7 @@ class KbRepository(private val context: Context, private val rootDoc: DocumentFi
                 var body: String? = null
                 val bodyHit = scope != "name" && run {
                     body = try {
-                        f.openInputStream()?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+                        openStream(f)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
                     } catch (e: Exception) {
                         ""
                     }

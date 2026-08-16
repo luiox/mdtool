@@ -32,6 +32,18 @@ android {
     buildFeatures {
         compose = true
     }
+    packaging {
+        resources {
+            // 规避常见 license 文件重复导致的 mergeDebugJavaResource 失败
+            excludes += setOf(
+                "META-INF/LICENSE-LGPL-3.txt",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE.txt",
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1",
+            )
+        }
+    }
 }
 
 dependencies {
@@ -44,7 +56,12 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
+    // flexmark 按需模块（不用 flexmark-all，避免把 PDF/openhtmltopdf 全家桶拉进来）
     implementation(libs.flexmark)
+    implementation(libs.flexmark.tables)
+    implementation(libs.flexmark.strikethrough)
+    implementation(libs.flexmark.tasklist)
+    implementation(libs.flexmark.autolink)
     implementation(libs.nanohttpd)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.documentfile)
