@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QSplitter,
     QTabWidget,
     QToolBar,
     QWidget,
@@ -47,7 +48,7 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        act = QAction("选择项目根目录", self)
+        act = QAction("选择知识库根目录", self)
         act.triggered.connect(self.select_root_dir)
         tb.addAction(act)
         self.root_label = QLabel("未选择")
@@ -75,6 +76,11 @@ class MainWindow(QMainWindow):
     # ── tabs ──
 
     def _build_tabs(self):
+        """两级布局：知识库主流程（上）+ 维护工具（下）。
+
+        知识库主流程：笔记库、文件浏览器（日常使用面）。
+        维护工具：媒体服务器、图片校验、图片迁移、空格修复（次级工具面）。
+        """
         from qtui.tabs.notes_browser import NotesBrowserTab
         from qtui.tabs.file_browser import FileBrowserTab
         from qtui.tabs.media_server import MediaServerTab
@@ -94,14 +100,25 @@ class MainWindow(QMainWindow):
         for t in self._all_tabs():
             t.main_window = self
 
+        # 知识库主流程
         self.tabs = QTabWidget(self)
         self.tabs.addTab(self.tab_notes, "笔记库")
         self.tabs.addTab(self.tab_files, "文件浏览器")
-        self.tabs.addTab(self.tab_media, "本地媒体服务器")
-        self.tabs.addTab(self.tab_space, "空格转下划线修复")
-        self.tabs.addTab(self.tab_check, "图片校验")
-        self.tabs.addTab(self.tab_migrate, "图片迁移")
-        self.setCentralWidget(self.tabs)
+
+        # 维护工具
+        self.tools = QTabWidget(self)
+        self.tools.addTab(self.tab_media, "本地媒体服务器")
+        self.tools.addTab(self.tab_check, "图片校验")
+        self.tools.addTab(self.tab_migrate, "图片迁移")
+        self.tools.addTab(self.tab_space, "空格转下划线修复")
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self.tabs)
+        splitter.addWidget(self.tools)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setChildrenCollapsible(True)
+        self.setCentralWidget(splitter)
 
     def _all_tabs(self):
         return [self.tab_notes, self.tab_files, self.tab_media,
@@ -109,7 +126,7 @@ class MainWindow(QMainWindow):
 
     def open_migrate(self, path):
         """Hand off a file/dir to the Migrate tab (called by the file browser)."""
-        self.tabs.setCurrentWidget(self.tab_migrate)
+        self.tools.setCurrentWidget(self.tab_migrate)
         self.tab_migrate.load_file(path)
 
     # ── tray ──
