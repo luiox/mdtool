@@ -47,6 +47,7 @@ CONFIG_FILE = Path.home() / ".mdtool_notes.json"
 DEFAULT_CONFIG = {
     "db_path": str(Path.home() / ".mdtool" / "notes.db"),
     "editor_command": "",  # empty → os.startfile (system default for .md)
+    "temp_root": "",       # 落地目录：空=系统临时目录；可填 RAM 盘路径（内存态模式）
 }
 TEMP_SUBDIR = "mdtool_edit"
 _DEBOUNCE_MS = 600
@@ -128,8 +129,7 @@ class NotesBrowserTab(BaseTab):
         self.config = _load_config()
         self.db: Optional[NotesDB] = None
         self._open_notes: dict[int, dict] = {}  # note_id -> {temp_path, last_hash, name, timer_id}
-        self.temp_dir = Path(tempfile.gettempdir()) / TEMP_SUBDIR
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_dir = self._resolve_temp_dir()
 
         self._watchdog_thread: Optional[QThread] = None
         self._watchdog_worker: Optional[_WatchdogWorker] = None
@@ -140,6 +140,48 @@ class NotesBrowserTab(BaseTab):
             self._open_library(Path(self.config["db_path"]))
         except Exception:
             pass
+
+    # ── 落地目录（内存态模式：临时文件放在哪，支持 RAM 盘）──
+
+    def _resolve_temp_dir(self) -> Path:
+        root = (self.config.get("temp_root") or "").strip()
+        base = Path(root) if root else Path(tempfile.gettempdir())
+        d = base / TEMP_SUBDIR
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _set_temp_root(self, root: str):
+        """切换落地目录：保存并关闭当前编辑会话 → 重启 watchdog。"""
+        root = (root or "").strip()
+        if root == self.config.get("temp_root", ""):
+            return
+        if self._open_notes:
+            if QMessageBox.question(
+                self, "切换落地目录",
+                "切换落地目录将先保存并关闭当前编辑会话。是否继续?"
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            self._flush_all_open()
+            for info in self._open_notes.values():
+                try:
+                    info["temp_path"].unlink()
+                except OSError:
+                    pass
+            self._open_notes.clear()
+        try:
+            self._stop_watchdog()
+            self.config["temp_root"] = root
+            self.temp_dir = self._resolve_temp_dir()
+            _save_config(self.config)
+            self._start_watchdog()
+            self.log(f"落地目录: {self.temp_dir}")
+        except Exception as e:
+            QMessageBox.critical(self, "切换失败", str(e))
+
+    def _browse_temp(self, line: QLineEdit):
+        p = QFileDialog.getExistingDirectory(self, "选择落地目录（如 RAM 盘根目录）")
+        if p:
+            line.setText(p)
 
     # ── UI ──
 
@@ -232,11 +274,17 @@ class NotesBrowserTab(BaseTab):
         form.addRow("数据库文件 (.db):", dbrow)
         self._dlg_editor = QLineEdit(self.config["editor_command"])
         form.addRow("编辑器命令 (空=系统默认):", self._dlg_editor)
+        self._dlg_temp = QLineEdit(self.config.get("temp_root", ""))
+        browse_t = QPushButton("浏览…")
+        browse_t.clicked.connect(lambda: self._browse_temp(self._dlg_temp))
+        temp_row = QWidget(); _HBL(temp_row).addWidget(self._dlg_temp); _HBL(temp_row).addWidget(browse_t)
+        form.addRow("落地目录 (空=系统临时; 支持 RAM 盘):", temp_row)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         form.addRow(btns)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._set_temp_root(self._dlg_temp.text())
             self.config["db_path"] = self._dlg_db.text().strip() or DEFAULT_CONFIG["db_path"]
             self.config["editor_command"] = self._dlg_editor.text().strip()
             _save_config(self.config)
@@ -266,6 +314,22 @@ class NotesBrowserTab(BaseTab):
         self._watchdog_thread.started.connect(self._watchdog_worker.start)
         self._watchdog_worker.path_changed.connect(self._on_temp_changed)
         self._watchdog_thread.start()
+
+    def _stop_watchdog(self):
+        if self._watchdog_worker is not None:
+            try:
+                # stop/join is safe from here: observer uses plain threading.
+                self._watchdog_worker.stop()
+            except Exception:
+                pass
+        if self._watchdog_thread is not None:
+            try:
+                self._watchdog_thread.quit()
+                self._watchdog_thread.wait(2000)
+            except Exception:
+                pass
+            self._watchdog_thread = None
+            self._watchdog_worker = None
 
     def _require_db(self) -> Optional[NotesDB]:
         if self.db is None:
@@ -646,17 +710,7 @@ class NotesBrowserTab(BaseTab):
                 info["timer"] = None
         self._flush_all_open()
         # Stop watchdog thread.
-        if self._watchdog_worker is not None:
-            QThread  # ensure imported
-            # Invoke stop on the worker thread via signal-less direct call;
-            # the observer's stop/join is safe to call from here (it's just
-            # threading primitives, no Qt).
-            self._watchdog_worker.stop()
-        if self._watchdog_thread is not None:
-            self._watchdog_thread.quit()
-            self._watchdog_thread.wait(2000)
-            self._watchdog_thread = None
-            self._watchdog_worker = None
+        self._stop_watchdog()
         # Best-effort temp cleanup.
         try:
             for f in self.temp_dir.glob("*"):

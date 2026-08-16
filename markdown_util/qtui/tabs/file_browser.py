@@ -2,9 +2,10 @@
 
 Walks the project root directory (the one picked in the toolbar) and shows a
 tree of folders + ``.md`` files. Right-click offers "打包为 ZIP" (bundle a
-markdown + its locally-referenced images) and "迁移图片到图床" (hand off to
-the Migrate tab). The migrate handoff uses a method on the main window rather
-than a hard tab index, so it survives tab reordering.
+markdown + its media into a self-contained zip, rewriting media URLs to
+relative paths per docs/知识库规范.md §2/§5) and "迁移图片到图床" (hand off
+to the Migrate tab). The migrate handoff uses a method on the main window
+rather than a hard tab index, so it survives tab reordering.
 """
 
 import zipfile
@@ -23,9 +24,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from link_resolver import DEFAULT_HOST, DEFAULT_PORT, is_external_url, iter_link_destinations, parse
 from qtui.icons import file_icon, folder_icon
+from qtui.tabs.media_server import load_config as load_media_config
 from qtui.widgets import BaseTab, LogPanel
-from utils import extract_image_links, resolve_image_path
+from utils import resolve_image_path
 
 
 class FileBrowserTab(BaseTab):
@@ -72,7 +75,8 @@ class FileBrowserTab(BaseTab):
             self.log(f"无法读取目录 {current_path}: {e}", "WARNING")
             return
         for entry in entries:
-            if entry.name.lower() == "assets":
+            # 知识库根目录的媒体面（images/assets/meta.db）不属于笔记树
+            if entry.name.lower() in ("assets", "images", "meta.db"):
                 continue
             if entry.is_dir():
                 item = QTreeWidgetItem(parent_item, [entry.name])
@@ -143,14 +147,24 @@ class FileBrowserTab(BaseTab):
             QMessageBox.critical(self, "错误", f"读取文件失败: {e}")
             return
 
-        links = extract_image_links(content)
-        image_paths = []
-        for link in links:
-            resolved = resolve_image_path(path, link["rel_path"])
-            if resolved and resolved.is_file():
-                image_paths.append(resolved)
-            else:
-                self.log(f"图片未找到 (已跳过): {link['rel_path']}", "WARNING")
+        # 媒体根配置：把服务器 URL 解析到本地文件（知识库规范 §2）
+        mcfg = load_media_config()
+        host = mcfg.get("host") or DEFAULT_HOST
+        try:
+            port = int(mcfg.get("port") or DEFAULT_PORT)
+        except (TypeError, ValueError):
+            port = DEFAULT_PORT
+        media_root = Path(mcfg["media_root"]) if mcfg.get("media_root") else None
+
+        new_content, members, skipped = plan_zip_bundle(
+            content, path,
+            media_root=media_root,
+            images_subdir=mcfg.get("images_subdir") or "images",
+            assets_subdir=mcfg.get("assets_subdir") or "assets",
+            host=host, port=port,
+        )
+        for d in skipped:
+            self.log(f"媒体未找到 (已跳过): {d}", "WARNING")
 
         default_name = path.stem + ".zip"
         zip_path, _ = QFileDialog.getSaveFileName(
@@ -159,19 +173,10 @@ class FileBrowserTab(BaseTab):
             return
         try:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.write(path, path.name)
-                used = set()
-                for img in image_paths:
-                    name = f"assets/{img.name}"
-                    if name in used:
-                        base, ext = img.stem, img.suffix
-                        c = 1
-                        while f"assets/{base}_{c}{ext}" in used:
-                            c += 1
-                        name = f"assets/{base}_{c}{ext}"
-                    used.add(name)
-                    zf.write(img, name)
-            self.log(f"打包完成: {zip_path} (1 个 .md, {len(image_paths)} 张图片)")
+                zf.writestr(path.name, new_content)
+                for member, src in members:
+                    zf.write(src, member)
+            self.log(f"打包完成: {zip_path} ({len(members)} 个媒体文件)")
         except Exception as e:
             QMessageBox.critical(self, "打包失败", str(e))
 
@@ -184,3 +189,64 @@ class FileBrowserTab(BaseTab):
             self.main_window.open_migrate(path)
         else:
             QMessageBox.information(self, "提示", "迁移功能未就绪")
+
+
+# ── zip 打包计划（纯函数，可测试）──
+
+def plan_zip_bundle(
+    content: str,
+    md_file: Path,
+    *,
+    media_root: Optional[Path] = None,
+    images_subdir: str = "images",
+    assets_subdir: str = "assets",
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+) -> tuple[str, list[tuple[str, Path]], list[str]]:
+    """解析 md 内容中的媒体链接，产出 zip 打包计划。
+
+    返回 ``(改写后的内容, [(zip成员名, 源文件路径), ...], [跳过的链接])``。
+
+    - 本知识库媒体 URL（经 resolver 识别）→ 从媒体根 ``<media_root>/<subdir>`` 找文件；
+      链接改写为 zip 内相对路径 ``images/<name>`` / ``assets/<name>``。
+    - 相对路径（旧笔记风格）→ 按 ``md_file`` 所在目录解析，改写为 ``assets/<basename>``。
+    - 外部链接 / 找不到文件 → 原样保留（找不到的记入 skipped 供日志）。
+    """
+    img_dir = Path(media_root) / images_subdir if media_root else None
+    ast_dir = Path(media_root) / assets_subdir if media_root else None
+    used: dict[str, int] = {}
+    out: list[str] = []
+    members: list[tuple[str, Path]] = []
+    skipped: list[str] = []
+    pos = 0
+    for start, end, dest, _is_image in iter_link_destinations(content):
+        out.append(content[pos:start])
+        member: Optional[str] = None
+        src: Optional[Path] = None
+        ref = parse(dest, host=host, port=port)
+        if ref is not None:
+            base = img_dir if ref.category == "images" else ast_dir
+            cand = base / ref.name if base else None
+            if cand is not None and cand.is_file():
+                member, src = f"{ref.category}/{ref.name}", cand
+        elif not is_external_url(dest):
+            cand = resolve_image_path(md_file, dest)
+            if cand is not None and cand.is_file():
+                member, src = f"assets/{Path(dest).name}", cand
+        if member is None:
+            out.append(content[start:end])
+            if ref is not None or not is_external_url(dest):
+                skipped.append(dest)
+            pos = end
+            continue
+        if member in used:
+            used[member] += 1
+            stem, ext = Path(member).stem, Path(member).suffix
+            member = f"{Path(member).parent}/{stem}_{used[member]}{ext}"
+        else:
+            used[member] = 1
+        members.append((member, src))
+        out.append(content[start:end].replace(dest, member, 1))
+        pos = end
+    out.append(content[pos:])
+    return "".join(out), members, skipped

@@ -33,11 +33,15 @@ jobs:
 
       - name: 导入冒烟测试（qtui + server 全部模块可导入）
         run: |
-          uv run python -c "import sys; sys.path.insert(0,'.'); import qtui.main_window, qtui.widgets, qtui.icons, qtui.workers; import qtui.tabs.notes_browser, qtui.tabs.file_browser, qtui.tabs.media_server, qtui.tabs.space_fix, qtui.tabs.image_check, qtui.tabs.migrate; import server.notes_db, server.meta_db, server.media_server, utils; print('imports OK')"
+          uv run python -c "import sys; sys.path.insert(0,'.'); import qtui.main_window, qtui.widgets, qtui.icons, qtui.workers; import qtui.tabs.notes_browser, qtui.tabs.file_browser, qtui.tabs.media_server, qtui.tabs.space_fix, qtui.tabs.image_check, qtui.tabs.migrate; import server.notes_db, server.meta_db, server.media_server, utils, link_resolver; print('imports OK')"
+
+      - name: 单元测试（link_resolver / zip 打包计划）
+        run: |
+          uv run python -m pytest -q
 
       - name: boot 冒烟（QApplication 下构造 MainWindow + 图标渲染 + shutdown）
         run: |
-          uv run python -c "import sys; sys.path.insert(0,'.'); from PySide6.QtWidgets import QApplication; app=QApplication(sys.argv); from qtui.main_window import MainWindow; w=MainWindow(); assert w.tabs.count()==6; from qtui.icons import folder_icon, file_icon, tray_icon; folder_icon(); file_icon(); tray_icon(); [t.shutdown() for t in w._all_tabs()]; print('boot OK')"
+          uv run python -c "import sys; sys.path.insert(0,'.'); from PySide6.QtWidgets import QApplication; app=QApplication(sys.argv); from qtui.main_window import MainWindow; w=MainWindow(); assert w.tabs.count()==2 and w.tools.count()==4; from qtui.icons import folder_icon, file_icon, tray_icon; folder_icon(); file_icon(); tray_icon(); [t.shutdown() for t in w._all_tabs()]; print('boot OK')"
 
   libmarkdown-test:
     name: libmarkdown 单元测试
