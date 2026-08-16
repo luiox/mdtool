@@ -2,9 +2,9 @@
 
 Run with:  uv run python main_qt.py
 
-The legacy tkinter entry point ``main.py`` is kept alongside for as long as
-the Qt migration is in progress; both share the same backend
-(``server/``, ``utils.py``) and config files.
+The app shares one backend (``server/``, ``utils.py``) and config files with
+the Typora uploader workflow; the legacy tkinter entry was removed in the
+kb-positioning cleanup.
 """
 
 import sys

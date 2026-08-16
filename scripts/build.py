@@ -69,7 +69,7 @@ hiddenimports = [
     'qtui.tabs.notes_browser','qtui.tabs.file_browser','qtui.tabs.media_server',
     'qtui.tabs.space_fix','qtui.tabs.image_check','qtui.tabs.migrate',
 ]
-for pkg in ('libmarkdown','mistletoe','PIL','pystray','watchdog','PySide6','shiboken6'):
+for pkg in ('libmarkdown','watchdog','PySide6','shiboken6'):
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 a = Analysis(['main_qt.py'], pathex=['.'], binaries=binaries, datas=datas,

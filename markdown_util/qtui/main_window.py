@@ -1,12 +1,9 @@
-"""Main window — PySide6 port of ``app.py``.
+"""Main window — the app shell of ``markdown_util`` (PySide6).
 
 Holds the QTabWidget and drives every tab through the uniform ``BaseTab``
-contract (``set_root_dir`` / ``shutdown``), replacing the tkinter version's
-hard per-tab attribute references (``self.tab0`` … ``self.tab5``) and the
-``on_root_dir_changed`` fan-out.
+contract (``set_root_dir`` / ``shutdown``).
 
-The tray icon uses Qt's own :class:`QSystemTrayIcon` (the old pystray call is
-dropped here — one fewer dependency and one fewer threading wrinkle).
+The tray icon uses Qt's own :class:`QSystemTrayIcon`.
 """
 
 import threading

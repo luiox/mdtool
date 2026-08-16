@@ -1,88 +1,89 @@
-# libmarkdown Feature Plan
+# libmarkdown Feature 状态
 
-Based on analysis of 4 test files covering 1,231 lines of Markdown.
-Priority: **P0** = must-roundtrip  **P1** = important  **P2** = nice-to-have
+幂等 Markdown AST 读写库。**定位：读改写工具（round-trip），不是渲染器。**
+任何未识别的语法由 **RawBlock / Text 兜底**，保证"读入 → 写回"字节级一致——因此下表里的 ❌ 项都不影响安全使用，只影响"能否在 AST 层面修改该结构"。
 
----
+状态图例：✅ 已实现且有测试 ｜ ⚠️ 已实现/有兜底但无专项测试 ｜ ❌ 未实现（由兜底保证幂等）
+当前测试：85 个，全部通过（`libmarkdown/tests/`，roundtrip 覆盖全部 test_files）。
 
-## Phase 1 — Core Block Syntax (P0)
+## Phase 1 — 块级核心
 
-| Feature | Test evidence | Status |
-|---------|--------------|--------|
-| **Paragraph** | `【Markdown】常用语法.md` entire doc | ✅ done |
-| **Heading (ATX)** `#`…`######` | 常用语法.md — heading section | ✅ done |
-| **Thematic Break** `---` `***` `___` | 常用语法.md — 分隔线 section | ✅ done |
-| **Fenced Code Block** `` ``` `` / `~~~` + info string | 常用语法.md + 拓展语法.md | ✅ done |
-| **Inline Code** `` `code` `` | 常用语法.md — 代码 section | ✅ partial |
-| **Escape Sequences** `\*` `\` ` ` `\!` etc. | 常用语法.md — 转义字符 section | ❌ |
-| **RawBlock** (catch-all for unrecognised syntax) | All files — ensures idempotency | ❌ |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 段落 Paragraph | ✅ | |
+| ATX 标题 `#`…`######` | ✅ | 含闭合井号、无空格、行内内容 |
+| 分隔线 `---` `***` `___` | ✅ | 含带空格形式 |
+| 围栏代码块 ` ``` ` / `~~~` | ✅ | 语言信息、多行、空块、缩进围栏、未闭合、内部反引号 |
+| 行内代码 `` `code` `` | ✅ | 含内部反引号 |
+| 转义序列 `\*` `\`` `\[` | ✅ | |
+| RawBlock（未识别语法兜底） | ✅ | 逐字保留，幂等核心 |
 
-## Phase 2 — Core Inline Syntax (P0)
+## Phase 2 — 行内核心
 
-| Feature | test evidence | Status |
-|---------|--------------|--------|
-| **Text** (plain text runs) | everywhere | ✅ done |
-| **Bold** `**text**` / `__text__` | 常用语法.md — 粗体 | ❌ inline parser |
-| **Italic** `*text*` / `_text_` | 常用语法.md — 斜体 | ❌ inline parser |
-| **Bold+Italic** `***` `___` `__*` `**__` | 常用语法.md — 粗斜体 | ❌ |
-| **Link** `[text](url "title")` | 常用语法.md — 链接 | ❌ |
-| **Image** `![alt](url "title")` | 常用语法.md — 图片 | ❌ |
-| **Hard Line Break** `  \n` / `\n` / `<br>` | 常用语法.md — 换行 | ❌ |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 纯文本 | ✅ | |
+| 粗体 `**text**` / `__text__` | ✅ | 含词中、星号/下划线 |
+| 斜体 `*text*` / `_text_` | ✅ | 含词中 |
+| 粗斜体嵌套/重叠 | ✅ | 嵌套与重叠均有测试 |
+| 链接 `[text](url "title")` | ✅ | 含 title、行内粗体 |
+| 图片 `![alt](url "title")` | ✅ | 含 title |
+| 硬换行 `  \n` / `<br>` | ✅ | 两个反斜杠换行与 `<br>` |
+| 软换行 | ✅ | 段落往返 |
 
-## Phase 3 — Lists & Quotes (P1)
+## Phase 3 — 列表与引用
 
-| Feature | Test evidence | Status |
-|---------|--------------|--------|
-| **Unordered List** `-` / `*` / `+` | 常用语法.md — 无序列表 | ❌ |
-| **Ordered List** `1.` `2.` … | 常用语法.md — 有序列表 | ❌ |
-| **Nested Lists** (indent sub-lists) | 常用语法.md — 嵌套列表 | ❌ |
-| **List + Paragraph** (continue list after blank line) | 常用语法.md — 列表中嵌套段落 | ❌ |
-| **List + Code Block** (8-space indent inside list) | 常用语法.md — 列表中代码块 | ❌ |
-| **BlockQuote** `>` / `>>` / multi-paragraph | 常用语法.md — 引用 | ❌ |
-| **BlockQuote mixed** (heading, list, code inside `>`) | 常用语法.md — 带元素的引用 | ❌ |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 无序列表 `-` / `*` / `+` | ✅ | |
+| 有序列表 `1.` `2.` | ✅ | 含非连续编号 |
+| 嵌套列表 | ✅ | |
+| 列表内空项 | ✅ | |
+| 列表内段落（空行续接） | ⚠️ | 无专项测试，依赖兜底 |
+| 列表内 8 空格代码块 | ❌ | |
+| 引用 `>` / `>>` | ✅ | 多行、多段、嵌套、空引用 |
+| 引用内混合元素（标题/列表/代码） | ⚠️ | 内部递归解析，无专项测试 |
 
-## Phase 4 — GFM / Extended Syntax (P1)
+## Phase 4 — GFM / 扩展
 
-| Feature | Test evidence | Status |
-|---------|--------------|--------|
-| **Table** (w/ alignment `:---` `:---:` `---:`) | 拓展语法.md — 表格 | ❌ |
-| **Strikethrough** `~~text~~` | 拓展语法.md — 删除线 | ❌ |
-| **Task List** `- [ ]` / `- [x]` | 拓展语法.md — 任务列表 | ❌ |
-| **Fenced Code w/ Mermaid** `` ```mermaid `` etc. | 拓展语法.md — Mermaid | ✅ (generic CodeBlock) |
-| **Footnote** `[^1]` / `[^1]: text` | 拓展语法.md — 脚注 | ❌ |
-| **Heading ID** `### title {#id}` | 拓展语法.md — 标题编号 | ❌ |
-| **Definition List** `Term\n: Definition` | 拓展语法.md — 定义列表 | ❌ |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 表格（含对齐） | ❌ | `TABLE_SEP` 已定义未接入解析；由 RawBlock 兜底 |
+| 删除线 `~~text~~` | ✅ | |
+| 任务列表 `- [ ]` | ❌ | 按普通列表项文本保留，无 AST 节点 |
+| Mermaid 等围栏代码 | ✅ | 泛化为 CodeBlock |
+| 脚注 `[^1]` / `[^1]: text` | ✅ | 引用有测试；定义解析已实现无专项测试 |
+| 标题 ID `### title {#id}` | ✅ | |
+| 定义列表 | ❌ | |
 
-## Phase 5 — HTML & Special (P1)
+## Phase 5 — HTML 与特殊
 
-| Feature | Test evidence | Status |
-|---------|--------------|--------|
-| **Inline HTML** `<font>` `<br>` `<div>` etc. | 内嵌HTML.md + 常用语法.md | ❌ |
-| **HTML Block** `<div>`…`</div>` standalone | 内嵌HTML.md | ❌ |
-| **Auto URL** `<https://…>` bare URLs | 拓展语法.md — 自动链接 | ❌ |
-| **Escaping pipe in table** `&#124;` | 拓展语法.md — 表中转义 | ❌ (covered by RawBlock) |
-| **Emoji shortcode** `:tent:` `:joy:` | 拓展语法.md — Emoji | ❌ |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 行内 HTML `<br>` 等 | ✅ | |
+| HTML 块 `<div>` | ✅ | |
+| 自动链接 `<https://…>` / 邮箱 | ✅ | |
+| 表格内转义 `&#124;` | ⚠️ | 表格未解析，随 RawBlock 保留 |
+| Emoji 短代码 `:joy:` | ❌ | 按文本保留 |
 
-## Phase 6 — Meta / Math (P2)
+## Phase 6 — 元信息 / 数学
 
-| Feature | Test evidence | Status |
-|---------|--------------|--------|
-| **YAML Front Matter** `---\nkey: val\n---` | All 3 docs | ❌ |
-| **LaTeX inline** `$...$` | LaTeX公式.md | ❌ |
-| **LaTeX display** `$$...$$` | LaTeX公式.md | ❌ |
-| **TOC** `[TOC]` | 常用语法.md | ❌ |
-| **Reference Link** `[text][label]` / `[label]: url` | 常用语法.md — 引用链接 | ❌ |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| YAML Front Matter | ✅ | 基本、多行、无正文 |
+| LaTeX 行内 `$...$` | ✅ | |
+| LaTeX 块 `$$...$$` | ✅ | |
+| TOC `[TOC]` | ❌ | 按文本保留 |
+| 引用式链接 `[text][label]` | ❌ | 按文本保留 |
 
----
+## 架构规则（不可违背）
 
-## Architecture Rule: Unknown Syntax
+1. 任何块级无法识别的结构 → **RawBlock**（记录 `source_start`/`source_end`，`dirty=False`）。
+2. 任何行内无法识别的片段 → 纯 **Text**。
+3. 未修改节点序列化时**逐字复制原文**——这是"字节级一致"的保证。
 
-Any construct the parser does not recognise at the block level should be
-captured as a **RawBlock** node that records `source_start` / `source_end`
-and has `dirty = False` — this guarantees the original text passes through
-untouched.
+## 已知缺口（按需补齐）
 
-Similarly, unrecognised inline spans should be captured as plain **Text**.
-
-This rule alone makes the library safe to use as a read-write pass-through
-even before all syntax features are implemented.
+- 表格解析（`TABLE_SEP` 已就绪）
+- 任务列表 AST、引用式链接
+- 列表内代码块/段落专项测试
