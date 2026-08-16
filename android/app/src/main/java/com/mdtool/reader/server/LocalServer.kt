@@ -1,5 +1,6 @@
 package com.mdtool.reader.server
 
+import android.content.ContentResolver
 import com.mdtool.reader.kb.KbRepository
 import com.mdtool.reader.kb.extractTitleFromMarkdown
 import com.mdtool.reader.render.MarkdownRenderer
@@ -20,6 +21,7 @@ import kotlinx.coroutines.runBlocking
 class LocalServer(
     private val repo: KbRepository,
     private val renderer: MarkdownRenderer,
+    private val contentResolver: ContentResolver,
 ) : NanoHTTPD("127.0.0.1", PORT) {
 
     override fun serve(session: IHTTPSession): Response {
@@ -74,13 +76,18 @@ class LocalServer(
     private fun serveMedia(category: String, name: String): Response {
         val doc = repo.mediaFile(category, name)
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
+        val input = try {
+            contentResolver.openInputStream(doc.uri)
+        } catch (e: Exception) {
+            null
+        } ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
         val headers = mutableMapOf<String, String>()
         if (category == "assets") {
             val original = runBlocking { repo.originalName(category, name) } ?: name
             headers["Content-Disposition"] =
                 "attachment; filename*=UTF-8''${URLEncoder.encode(original, "UTF-8")}"
         }
-        val response = newChunkedResponse(Response.Status.OK, mimeFor(name), doc.openInputStream())
+        val response = newChunkedResponse(Response.Status.OK, mimeFor(name), input)
         headers.forEach { (k, v) -> response.addHeader(k, v) }
         return response
     }

@@ -62,13 +62,13 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
 
     private var server: LocalServer? = null
-    private var serverError: String? = null
+    internal var serverError: String? = null
 
-    private fun startServer(repo: KbRepository) {
+    internal fun startServer(repo: KbRepository) {
         // 切换知识库时重启服务器，避免旧服务器继续指向旧根目录
         server?.stop()
         server = null
-        val s = LocalServer(repo, MarkdownRenderer())
+        val s = LocalServer(repo, MarkdownRenderer(), applicationContext.contentResolver)
         try {
             s.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
             server = s

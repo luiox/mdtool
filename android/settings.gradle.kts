@@ -1,14 +1,12 @@
 pluginManagement {
     repositories {
-        google {
-            content {
-                includeGroupByRegex("com\\.android.*")
-                includeGroupByRegex("com\\.google.*")
-                includeGroupByRegex("androidx.*")
-            }
-        }
+        google()
         mavenCentral()
         gradlePluginPortal()
+        // 国内镜像兜底：dl.google.com / plugins.gradle.org 在国内常不可达
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/gradle-plugin")
+        maven("https://maven.aliyun.com/repository/central")
     }
 }
 
@@ -17,6 +15,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // 国内镜像兜底：dl.google.com / repo.maven.apache.org 在国内常不可达
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
     }
 }
 

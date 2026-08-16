@@ -10,17 +10,27 @@
 - 全文搜索在端上直接扫描文件（支持正则，无效正则按字面匹配）；
 - 附件下载按 `meta.db` 回传原始文件名（缺失时降级用时间戳名）。
 
-## 构建（需要 Android Studio）
+## 构建（已本地验证）
 
-本仓库开发机没有 Android SDK，代码未经本地编译验证——请用 Android Studio 构建：
+已用本机 SDK（`D:\sdk\AndroidSdk`，platforms 35 + build-tools 35.0.1）验证：`./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**（产出 `app/build/outputs/apk/debug/app-debug.apk`）。
 
-1. Android Studio（新版即可）→ Open → 选择本目录 `android/`；
-2. 等待 Gradle Sync（首次会自动下载依赖，需要网络）；
-3. Run 到真机或模拟器。
+命令行构建：
 
-> 版本基线：AGP 8.5.2 / Kotlin 2.0.21 / Compose BOM 2024.10.01 / flexmark 0.64.8 / NanoHTTPD 2.3.1。
+```powershell
+# 首次：在 android/ 下创建 local.properties，内容：sdk.dir=D\:\\sdk\\AndroidSdk
+# （Android Studio 打开时会自动处理，无需手动建）
+.\gradlew.bat :app:assembleDebug
+```
+
+Android Studio 打开本目录即可 Sync/Build/Run。
+
+**国内网络说明**：
+
+- `settings.gradle.kts` 已内置阿里云镜像兜底（dl.google.com 在国内常不可达）；
+- gradle 发行版走腾讯镜像（`gradle/wrapper/gradle-wrapper.properties`）。
+
+> 版本基线：AGP 8.5.2 / Kotlin 2.0.21 / Compose BOM 2024.10.01 / flexmark 0.64.8（按需模块，不用 flexmark-all 以免引入 PDF 全家桶）/ NanoHTTPD 2.3.1。
 > 如你的环境需要更高版本，在 `gradle/libs.versions.toml` 中升级（注意三者兼容性）。
-> `gradle-wrapper.properties` 已提供；wrapper 的二进制 jar 由 Android Studio 首次 Sync 自动处理。
 
 ## 使用
 
