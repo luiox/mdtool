@@ -13,3 +13,10 @@ typora-uploader/target/
 # uv 缓存
 .uv-cache/
 *.log
+
+# Android / IDE
+.gradle/
+local.properties
+.kotlin/
+.idea/
+*.apk

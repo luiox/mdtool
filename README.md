@@ -4,7 +4,7 @@
 
 - **桌面端**：知识库管理器（文件夹视图、正则全文搜索、导出 zip/db、打开 Typora 编辑）+ 维护工具（本地媒体服务器、图片校验、图片迁移、命名修复）。
 - **Typora**：专职编辑器，配合自定义上传器（`typora-uploader`）把图片自动上传到本地图床。
-- **手机端（规划中）**：安卓只读浏览 app（内置本地服务器 + WebView 渲染），只支持散装文件形态。
+- **手机端**：安卓只读浏览 app（`android/`，Kotlin + Compose，内置本地服务器 + WebView 渲染），只支持散装文件形态；同步由第三方工具负责，详见 [`docs/安卓端规划.md`](docs/安卓端规划.md)。
 
 > 完整的产品定位与架构决策见 [`docs/定位与架构分析.md`](docs/定位与架构分析.md)；
 > 知识库规范（目录布局、链接规范）见 [`docs/知识库规范.md`](docs/知识库规范.md)。
@@ -16,6 +16,7 @@
 | `markdown_util/` | PySide6 桌面应用（入口 `main_qt.py`） |
 | `libmarkdown/` | 幂等 Markdown AST 读写库：读入 AST → 修改节点 → 写回，未修改部分逐字保留（字节级一致） |
 | `typora-uploader/` | Rust 编写的 Typora 自定义图片上传器，把图片上传到本地图床并输出 URL |
+| `android/` | 安卓只读阅读器（Kotlin + Compose + flexmark + NanoHTTPD） |
 | `scripts/` | 打包（`build.py`）与版本管理（`version.py`） |
 | `docs/` | 规范与架构文档 |
 
