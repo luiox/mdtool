@@ -1,12 +1,17 @@
-"""Main window — the app shell of ``markdown_util`` (PySide6).
+"""Main window — app shell of ``markdown_util`` (PySide6).
 
-Holds the QTabWidget and drives every tab through the uniform ``BaseTab``
-contract (``set_root_dir`` / ``shutdown``).
+布局（重构后）：
+- 左侧边栏：品牌区 + 分组导航（知识库 / 工具）+ 底部「日志」入口。
+- 右侧：顶栏（当前页标题 + 知识库根目录选择）+ 页面栈，一次只显示
+  一个页面——取代旧版上下两个 QTabWidget 垂直堆叠的布局。
 
-The tray icon uses Qt's own :class:`QSystemTrayIcon`.
+页面统一走 :class:`qtui.widgets.BaseTab` 契约（``set_root_dir`` /
+``shutdown``）；日志经 :mod:`qtui.logbus` 汇入日志页。托盘与退出确认
+行为保持与旧版一致。
 """
 
-import threading
+import html
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -15,54 +20,197 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QSplitter,
-    QTabWidget,
-    QToolBar,
+    QPushButton,
+    QStackedWidget,
+    QSystemTrayIcon,
+    QTextEdit,
+    QVBoxLayout,
     QWidget,
 )
 
-from qtui.icons import tray_icon
-from qtui.widgets import BaseTab
 from _version import get_version
+from qtui.icons import nav_icon, tray_icon
+from qtui.logbus import get_log_bus
+from qtui.theme import THEMES
+from qtui.widgets import BaseTab, muted_label
+
+# 导航模型：(分组名, [(key, 标题, 图标名)])；日志页独立于分组置底。
+# Tab 类在 _build_pages 中延迟导入，避免 main_qt 启动时的导入环。
+NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
+    ("知识库", [
+        ("library", "笔记库", "notes"),  # 散装目录 ⇄ db 容器共用一页（见 tabs/library.py）
+        ("search", "搜索", "search"),    # 全文检索独立成页，不与目录树抢空间
+    ]),
+    ("工具", [
+        ("media", "媒体服务器", "server"),
+        ("check", "图片校验", "check"),
+        ("migrate", "图片迁移", "migrate"),
+        ("space", "空格修复", "space"),
+    ]),
+]
+PAGE_TITLES = {key: title for _, items in NAV for key, title, _ in items}
+SIDEBAR_WIDTH = 188
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Markdown 工具集 v{get_version()}")
-        self.resize(1100, 750)
+        self.resize(1180, 760)
+        self.setMinimumSize(980, 640)
         self._closing = False
         self._tray = None
 
-        self._build_toolbar()
-        self._build_tabs()
+        # key -> {"tab": BaseTab | None(log页), "button": QPushButton}
+        self._pages: dict[str, dict] = {}
+        self._nav_keys: list[str] = []
+        self._build_shell()
+        self.switch_page("library")  # 默认落在笔记库
         self._setup_tray()
 
-    # ── toolbar ──
+    # ── 外壳 ──
 
-    def _build_toolbar(self):
-        tb = QToolBar(self)
-        tb.setMovable(False)
-        self.addToolBar(tb)
+    def _build_shell(self):
+        central = QWidget(self)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._build_sidebar())
+        root.addWidget(self._build_right(), 1)
+        self.setCentralWidget(central)
 
-        act = QAction("选择知识库根目录", self)
-        act.triggered.connect(self.select_root_dir)
-        tb.addAction(act)
-        self.root_label = QLabel("未选择")
-        self.root_label.setStyleSheet("color: gray; padding-left: 10px;")
-        tb.addWidget(self.root_label)
+    def _build_sidebar(self) -> QWidget:
+        sb = QWidget(objectName="sidebar")
+        sb.setFixedWidth(SIDEBAR_WIDTH)
+        lay = QVBoxLayout(sb)
+        lay.setContentsMargins(12, 14, 12, 12)
+        lay.setSpacing(2)
+
+        lay.addWidget(QLabel("mdtool", objectName="brandTitle"))
+        lay.addWidget(QLabel(f"v{get_version()}", objectName="brandVersion"))
+        lay.addSpacing(14)
+
+        for group_name, items in NAV:
+            lay.addSpacing(8)
+            lay.addWidget(QLabel(group_name, objectName="navGroupLabel"))
+            for key, title, icon_name in items:
+                btn = self._make_nav_button(key, title, icon_name)
+                self._pages[key] = {"button": btn}
+                self._nav_keys.append(key)
+                lay.addWidget(btn)
+
+        lay.addStretch(1)
+        log_btn = self._make_nav_button("log", "日志", "log")
+        self._pages["log"] = {"button": log_btn}
+        self._nav_keys.append("log")
+        lay.addWidget(log_btn)
+        return sb
+
+    def _make_nav_button(self, key: str, title: str, icon_name: str) -> QPushButton:
+        btn = QPushButton(f" {title}", checkable=True, objectName="navButton")
+        btn.setIcon(nav_icon(icon_name))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda _checked, k=key: self.switch_page(k))
+        return btn
+
+    def _build_right(self) -> QWidget:
+        right = QWidget()
+        lay = QVBoxLayout(right)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self._build_header())
+        lay.addSpacing(10)
+
+        self.stack = QStackedWidget(right)
+        lay.addWidget(self.stack, 1)
+        self._build_pages()
+        self.stack.addWidget(LogPage(self))  # 日志页固定在栈末尾
+        return right
+
+    def _build_header(self) -> QWidget:
+        bar = QWidget(objectName="headerBar")
+        bar.setFixedHeight(52)
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(18, 0, 16, 0)
+
+        self.page_title = QLabel("", objectName="pageTitle")
+        h.addWidget(self.page_title)
+        h.addSpacing(20)
+
+        h.addWidget(muted_label("知识库根目录:"))
+        self.root_label = muted_label("未选择")
+        self.root_label.setMaximumWidth(360)
+        h.addWidget(self.root_label)
+
+        h.addStretch(1)
+        pick = QPushButton("选择目录…")
+        pick.clicked.connect(self.select_root_dir)
+        h.addWidget(pick)
+        return bar
+
+    def _build_pages(self):
+        """实例化六个页面并按侧边栏顺序入栈；类延迟导入防导入环。"""
+        from qtui.tabs.image_check import ImageCheckTab
+        from qtui.tabs.library import LibraryPage
+        from qtui.tabs.media_server import MediaServerTab
+        from qtui.tabs.migrate import MigrateTab
+        from qtui.tabs.search import SearchPage
+        from qtui.tabs.space_fix import SpaceFixTab
+
+        classes = {
+            "library": LibraryPage,
+            "search": SearchPage,
+            "media": MediaServerTab,
+            "check": ImageCheckTab,
+            "migrate": MigrateTab,
+            "space": SpaceFixTab,
+        }
+        for key in self._nav_keys:
+            if key == "log":
+                continue
+            tab = classes[key]()
+            tab.main_window = self
+            self._pages[key]["tab"] = tab
+            self.stack.addWidget(tab)
+
+    # ── 页面切换 / 根目录 ──
+
+    def switch_page(self, key: str):
+        entry = self._pages.get(key)
+        if entry is None or "tab" not in entry and key != "log":
+            return
+        index = len(self._nav_keys) - 1 if key == "log" else self._nav_keys.index(key)
+        self.stack.setCurrentIndex(index)
+        self.page_title.setText(PAGE_TITLES.get(key, "日志"))
+        for k, e in self._pages.items():  # 手动互斥（不用 QButtonGroup 的自动 id）
+            e["button"].setChecked(k == key)
+
+    def all_tabs(self) -> list[BaseTab]:
+        return [e["tab"] for e in self._pages.values() if "tab" in e]
+
+    @property
+    def library_page(self):
+        return self._pages["library"]["tab"]
+
+    def open_db_note(self, note_id: int):
+        """搜索页双击 db 结果 → 切回笔记库页并打开编辑会话。"""
+        self.switch_page("library")
+        lib = self.library_page
+        lib._set_mode("db")
+        lib._db_open_note_for_edit(note_id)
 
     def select_root_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "选择项目根目录")
+        path = QFileDialog.getExistingDirectory(self, "选择知识库根目录")
         if not path:
             return
         self.root_dir = Path(path)
         self.root_label.setText(str(self.root_dir))
-        self.root_label.setStyleSheet("color: black; padding-left: 10px;")
-        for tab in self._all_tabs():
+        self.root_label.setToolTip(str(self.root_dir))
+        for tab in self.all_tabs():
             tab.set_root_dir(self.root_dir)
 
     @property
@@ -73,70 +221,19 @@ class MainWindow(QMainWindow):
     def root_dir(self, value: Optional[Path]):
         self._root_dir = value
 
-    # ── tabs ──
-
-    def _build_tabs(self):
-        """两级布局：知识库主流程（上）+ 维护工具（下）。
-
-        知识库主流程：笔记库、文件浏览器（日常使用面）。
-        维护工具：媒体服务器、图片校验、图片迁移、空格修复（次级工具面）。
-        """
-        from qtui.tabs.notes_browser import NotesBrowserTab
-        from qtui.tabs.file_browser import FileBrowserTab
-        from qtui.tabs.media_server import MediaServerTab
-        from qtui.tabs.space_fix import SpaceFixTab
-        from qtui.tabs.image_check import ImageCheckTab
-        from qtui.tabs.migrate import MigrateTab
-
-        self.tab_notes = NotesBrowserTab()
-        self.tab_files = FileBrowserTab()
-        self.tab_media = MediaServerTab()
-        self.tab_space = SpaceFixTab()
-        self.tab_check = ImageCheckTab()
-        self.tab_migrate = MigrateTab()
-
-        # Inject back-references so tabs can reach siblings (e.g. file browser
-        # → migrate) and the main window without import cycles.
-        for t in self._all_tabs():
-            t.main_window = self
-
-        # 知识库主流程
-        self.tabs = QTabWidget(self)
-        self.tabs.addTab(self.tab_notes, "笔记库")
-        self.tabs.addTab(self.tab_files, "文件浏览器")
-
-        # 维护工具
-        self.tools = QTabWidget(self)
-        self.tools.addTab(self.tab_media, "本地媒体服务器")
-        self.tools.addTab(self.tab_check, "图片校验")
-        self.tools.addTab(self.tab_migrate, "图片迁移")
-        self.tools.addTab(self.tab_space, "空格转下划线修复")
-
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(self.tabs)
-        splitter.addWidget(self.tools)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setChildrenCollapsible(True)
-        self.setCentralWidget(splitter)
-
-    def _all_tabs(self):
-        return [self.tab_notes, self.tab_files, self.tab_media,
-                self.tab_space, self.tab_check, self.tab_migrate]
-
     def open_migrate(self, path):
-        """Hand off a file/dir to the Migrate tab (called by the file browser)."""
-        self.tools.setCurrentWidget(self.tab_migrate)
-        self.tab_migrate.load_file(path)
+        """文件浏览器右键「迁移图片」→ 切到迁移页并载入目标。"""
+        self.switch_page("migrate")
+        self._pages["migrate"]["tab"].load_file(path)
 
-    # ── tray ──
+    # ── 托盘 ──
 
     def _setup_tray(self):
-        from PySide6.QtWidgets import QSystemTrayIcon, QMenu
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         self._tray = QSystemTrayIcon(tray_icon(), self)
         self._tray.setToolTip("Markdown 工具集")
+        from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         act_show = menu.addAction("显示窗口")
         act_show.triggered.connect(self._tray_show)
@@ -147,7 +244,6 @@ class MainWindow(QMainWindow):
         self._tray.show()
 
     def _on_tray_activated(self, reason):
-        from PySide6.QtWidgets import QSystemTrayIcon
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._tray_show()
 
@@ -161,13 +257,12 @@ class MainWindow(QMainWindow):
         self._do_shutdown()
         QApplication.quit()
 
-    # ── close handling ──
+    # ── 关闭处理 ──
 
     def closeEvent(self, event):  # noqa: N802 - Qt override
         if self._closing:
             event.accept()
             return
-        # Mirror the old app.py behavior: ask exit vs. minimize-to-tray.
         dlg = QMessageBox(self)
         dlg.setWindowTitle("退出确认")
         dlg.setText("关闭程序时执行什么操作？")
@@ -187,21 +282,55 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _do_shutdown(self):
-        for tab in self._all_tabs():
+        for tab in self.all_tabs():
             try:
                 tab.shutdown()
             except Exception:
                 pass
 
 
-class _PlaceholderTab(BaseTab):
-    """Shown for tabs not yet ported; points users to the legacy entry."""
+class LogPage(QWidget):
+    """全局日志页：订阅 :mod:`qtui.logbus`，深底终端观感。
 
-    def __init__(self, message: str, parent=None):
+    页面创建晚于早期消息也没关系——总线保留环形缓冲，
+    构造时先回放快照再订阅增量。
+    """
+
+    _LEVEL_COLORS = {"WARNING": "#fbbf24", "ERROR": "#f87171"}
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        from PySide6.QtWidgets import QLabel
-        lay = __import__("PySide6.QtWidgets", fromlist=["QVBoxLayout"]).QVBoxLayout(self)
-        lab = QLabel(message)
-        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lab.setStyleSheet("color: gray; font-size: 13px;")
-        lay.addWidget(lab)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 0, 18, 14)
+        lay.setSpacing(8)
+
+        bar = QHBoxLayout()
+        bar.addWidget(muted_label("所有页面的运行日志汇总于此（调试用）。"))
+        bar.addStretch(1)
+        clear = QPushButton("清空日志")
+        clear.clicked.connect(get_log_bus().clear)
+        bar.addWidget(clear)
+        lay.addLayout(bar)
+
+        self.view = QTextEdit(readOnly=True, objectName="logView")
+        lay.addWidget(self.view, 1)
+
+        bus = get_log_bus()
+        for msg, level in bus.snapshot():
+            self._append(msg, level)
+        bus.message.connect(self._append)
+        bus.cleared.connect(self.view.clear)
+
+    def _dim_color(self) -> str:
+        name = QApplication.instance().property("theme") or "light"
+        return THEMES[name].log_muted
+
+    def _append(self, msg: str, level: str):
+        ts = datetime.now().strftime("%H:%M:%S")
+        text = html.escape(msg)
+        color = self._LEVEL_COLORS.get(level)
+        stamp = f'<span style="color:{self._dim_color()}">[{ts}]</span>'
+        if color:
+            self.view.append(f'{stamp} <span style="color:{color}">[{level}] {text}</span>')
+        else:
+            self.view.append(f"{stamp} {text}")

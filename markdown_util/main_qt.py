@@ -12,11 +12,13 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from qtui.main_window import MainWindow
+from qtui.theme import apply_theme
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MarkdownUtil")
+    apply_theme(app, "light")
     app.setQuitOnLastWindowClosed(False)  # keep running when minimized to tray
 
     win = MainWindow()

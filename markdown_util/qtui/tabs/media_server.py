@@ -1,19 +1,16 @@
-"""Local media server tab — PySide6 port of ``tabs/media_server_tab.py``.
+"""Local media server page — 127.0.0.1:8765 媒体托管（手机端契约端口）。
 
-Runs the existing :class:`server.media_server.MediaServer` (HTTP image/asset
-host on 127.0.0.1:8765). The server + DB layer is untouched; only the form,
-buttons, log and dialogs are rebuilt with Qt. Config still lives in
-``~/.monocodes_media.json``.
+后端 :class:`server.media_server.MediaServer` 不动；配置仍落在
+``~/.monocodes_media.json``（file_browser 的 zip 导出也读它）。
+UI 层变化：日志走全局 logbus，服务器状态用 ``[severity]`` 动态属性
+表达，不再内联样式。
 """
 
 import json
-import mimetypes
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -28,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qtui.widgets import BaseTab, LogPanel
+from qtui.widgets import BaseTab, PathRow, SearchBar, set_severity
 from server.media_server import MediaServer
 
 CONFIG_FILE = Path.home() / ".monocodes_media.json"
@@ -71,18 +68,18 @@ class MediaServerTab(BaseTab):
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 6)
-        outer.setSpacing(6)
+        outer.setContentsMargins(18, 0, 18, 14)
+        outer.setSpacing(10)
+        outer.addStretch(0)
 
-        # ── status ──
+        # ── 状态 ──
         gb_status = QGroupBox("服务器状态")
         sl = QVBoxLayout(gb_status)
         self.status_label = QLabel("● 已停止")
-        self.status_label.setStyleSheet("color: red; font-size: 11pt;")
+        set_severity(self.status_label, "error")
         sl.addWidget(self.status_label)
         url_row = QHBoxLayout()
         self.url_label = QLabel("地址: -")
-        self.url_label.setStyleSheet("color: gray;")
         url_row.addWidget(self.url_label)
         url_row.addSpacing(20)
         url_row.addWidget(QLabel("图片: /images/  |  附件: /assets/"))
@@ -90,23 +87,22 @@ class MediaServerTab(BaseTab):
         sl.addLayout(url_row)
         btn_row = QHBoxLayout()
         self.toggle_btn = QPushButton("启动服务器")
+        self.toggle_btn.setProperty("variant", "primary")
         self.toggle_btn.clicked.connect(self.toggle_server)
         btn_row.addWidget(self.toggle_btn)
-        b = QPushButton("在浏览器中打开"); b.clicked.connect(self.open_browser)
+        b = QPushButton("在浏览器中打开")
+        b.clicked.connect(self.open_browser)
         btn_row.addWidget(b)
         btn_row.addStretch(1)
         sl.addLayout(btn_row)
         outer.addWidget(gb_status)
 
-        # ── config ──
+        # ── 配置 ──
         gb_cfg = QGroupBox("配置")
         cfg_form = QFormLayout(gb_cfg)
-        self.dir_edit = QLineEdit(self.config.get("media_root", ""))
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(self.dir_edit, 1)
-        b = QPushButton("浏览"); b.clicked.connect(self.browse_dir)
-        dir_row.addWidget(b)
-        cfg_form.addRow("媒体根目录:", _wrap(dir_row))
+        self.dir_row = PathRow(self.config.get("media_root", ""), mode="dir",
+                               dialog_title="选择媒体根目录")
+        cfg_form.addRow("媒体根目录:", self.dir_row)
         self.img_dir_edit = QLineEdit(self.config.get("images_subdir", "images"))
         self.ast_dir_edit = QLineEdit(self.config.get("assets_subdir", "assets"))
         sub_row = QHBoxLayout()
@@ -126,79 +122,68 @@ class MediaServerTab(BaseTab):
         ph_row.addWidget(QLabel("(建议 127.0.0.1 仅本地)"))
         ph_row.addStretch(1)
         cfg_form.addRow("端口:", _wrap(ph_row))
-        b = QPushButton("保存配置"); b.clicked.connect(self.save_config)
-        cfg_form.addRow(b)
+        save_btn = QPushButton("保存配置")
+        save_btn.clicked.connect(self.save_config)
+        cfg_form.addRow(save_btn)
         outer.addWidget(gb_cfg)
 
-        # ── upload ──
+        # ── 快速上传 ──
         gb_up = QGroupBox("快速上传")
         up = QGridLayout(gb_up)
         up.addWidget(QLabel("选择文件:"), 0, 0)
         self.upload_path_edit = QLineEdit()
         up.addWidget(self.upload_path_edit, 0, 1)
-        b = QPushButton("浏览文件"); b.clicked.connect(self._browse_file)
+        b = QPushButton("浏览文件")
+        b.clicked.connect(self._browse_file)
         up.addWidget(b, 0, 2)
         self.rb_image = QRadioButton("上传为图片 (images/)")
         self.rb_asset = QRadioButton("上传为附件 (assets/)")
         self.rb_image.setChecked(True)
         up.addWidget(self.rb_image, 1, 0, 1, 2)
         up.addWidget(self.rb_asset, 1, 2)
-        b = QPushButton("上传"); b.clicked.connect(self._do_upload)
+        b = QPushButton("上传")
+        b.clicked.connect(self._do_upload)
         up.addWidget(b, 2, 0)
-        self.upload_result_edit = QLineEdit()
-        self.upload_result_edit.setReadOnly(True)
-        self.upload_result_edit.setStyleSheet("color: blue;")
+        self.upload_result_edit = QLineEdit(readOnly=True)
         up.addWidget(self.upload_result_edit, 2, 1, 1, 2)
         outer.addWidget(gb_up)
 
-        # ── query ──
+        # ── 查询 / 维护 ──
         gb_q = QGroupBox("查询元信息")
         ql = QHBoxLayout(gb_q)
-        ql.addWidget(QLabel("搜索(支持正则):"))
-        self.query_edit = QLineEdit()
-        ql.addWidget(self.query_edit, 1)
-        b = QPushButton("搜索图片"); b.clicked.connect(lambda: self._do_query("images"))
+        self.query_bar = SearchBar(scopes=(), show_scope=False, show_clear=False)
+        ql.addWidget(self.query_bar, 1)
+        b = QPushButton("搜索图片")
+        b.clicked.connect(lambda: self._do_query("images"))
         ql.addWidget(b)
-        b = QPushButton("搜索附件"); b.clicked.connect(lambda: self._do_query("assets"))
+        b = QPushButton("搜索附件")
+        b.clicked.connect(lambda: self._do_query("assets"))
         ql.addWidget(b)
         outer.addWidget(gb_q)
 
-        # ── maintenance ──
         gb_m = QGroupBox("维护")
         ml = QHBoxLayout(gb_m)
         ml.addWidget(QLabel("垃圾回收:"))
-        b = QPushButton("GC Images"); b.clicked.connect(lambda: self._do_gc("images"))
+        b = QPushButton("GC Images")
+        b.clicked.connect(lambda: self._do_gc("images"))
         ml.addWidget(b)
-        b = QPushButton("GC Assets"); b.clicked.connect(lambda: self._do_gc("assets"))
+        b = QPushButton("GC Assets")
+        b.clicked.connect(lambda: self._do_gc("assets"))
         ml.addWidget(b)
-        b = QPushButton("GC All"); b.clicked.connect(lambda: self._do_gc("all"))
+        b = QPushButton("GC All")
+        b.clicked.connect(lambda: self._do_gc("all"))
         ml.addWidget(b)
         ml.addWidget(QLabel("(删除数据库中已丢失文件的记录)"))
         ml.addStretch(1)
         outer.addWidget(gb_m)
 
-        # ── log ──
-        gb_log = QGroupBox("日志")
-        ll = QVBoxLayout(gb_log)
-        bar = QHBoxLayout()
-        b = QPushButton("清空日志"); b.clicked.connect(lambda: self.log_panel.clear_log())
-        bar.addWidget(b)
-        b = QPushButton("查询结果"); b.clicked.connect(self._show_query_result)
-        bar.addWidget(b)
-        bar.addStretch(1)
-        ll.addLayout(bar)
-        self.log_panel = LogPanel(height_lines=8)
-        ll.addWidget(self.log_panel)
-        outer.addWidget(gb_log, 1)
-
-    def log(self, msg: str, level: str = "INFO"):
-        self.log_panel.append_line(msg, level)
+        outer.addStretch(1)
 
     # ── helpers ──
 
     def _collect_config(self) -> dict:
         return {
-            "media_root": self.dir_edit.text().strip(),
+            "media_root": self.dir_row.text(),
             "images_subdir": self.img_dir_edit.text().strip() or "images",
             "assets_subdir": self.ast_dir_edit.text().strip() or "assets",
             "port": self.port_edit.text().strip(),
@@ -206,13 +191,16 @@ class MediaServerTab(BaseTab):
         }
 
     def _set_config_enabled(self, enabled: bool):
-        for w in (self.dir_edit, self.img_dir_edit, self.ast_dir_edit):
-            w.setEnabled(enabled)
+        self.dir_row.edit.setEnabled(enabled)
+        self.img_dir_edit.setEnabled(enabled)
+        self.ast_dir_edit.setEnabled(enabled)
 
-    def browse_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "选择媒体根目录")
-        if path:
-            self.dir_edit.setText(path)
+    def _set_status(self, running: bool, url: str = "-"):
+        self.status_label.setText("● 运行中" if running else "● 已停止")
+        set_severity(self.status_label, "success" if running else "error")
+        self.url_label.setText(f"地址: {url}")
+        self.toggle_btn.setText("停止服务器" if running else "启动服务器")
+        self._set_config_enabled(not running)
 
     def save_config(self):
         cfg = self._collect_config()
@@ -228,11 +216,7 @@ class MediaServerTab(BaseTab):
     def toggle_server(self):
         if self.server.running:
             self.server.stop()
-            self.toggle_btn.setText("启动服务器")
-            self.status_label.setText("● 已停止")
-            self.status_label.setStyleSheet("color: red; font-size: 11pt;")
-            self.url_label.setText("地址: -")
-            self._set_config_enabled(True)
+            self._set_status(False)
             self.log("服务器已停止")
         else:
             self.start_server()
@@ -264,12 +248,8 @@ class MediaServerTab(BaseTab):
         except OSError as e:
             QMessageBox.critical(self, "启动失败", f"端口 {cfg['port']} 可能被占用:\n{e}")
             return
-        self.toggle_btn.setText("停止服务器")
-        self.status_label.setText("● 运行中")
-        self.status_label.setStyleSheet("color: green; font-size: 11pt;")
         url = f"http://{cfg['host']}:{cfg['port']}"
-        self.url_label.setText(f"地址: {url}")
-        self._set_config_enabled(False)
+        self._set_status(True, url)
         self.log(f"服务器已启动: {url}")
         self.log(f"  图片: {url}/images/  →  {self.server.images_dir}")
         self.log(f"  附件: {url}/assets/  →  {self.server.assets_dir}")
@@ -326,7 +306,7 @@ class MediaServerTab(BaseTab):
         if not self.server.running:
             QMessageBox.warning(self, "警告", "请先启动服务器")
             return
-        pattern = self.query_edit.text().strip()
+        pattern = self.query_bar.text()
         meta = self.server.meta_db
         rows = meta.search_images(pattern) if category == "images" else meta.search_assets(pattern)
         self._query_result = [dict(r) for r in rows]
@@ -335,13 +315,6 @@ class MediaServerTab(BaseTab):
             self.log(f"  {row['timestamp_name']} ← {row['original_name']} ({row['size']}B)")
         if len(rows) > 10:
             self.log(f"  ... 还有 {len(rows)-10} 条")
-
-    def _show_query_result(self):
-        if not self._query_result:
-            self.log("(无查询结果)")
-            return
-        for row in self._query_result[:20]:
-            self.log(f"  {row['timestamp_name']:40s} | {row['original_name']}")
 
     # ── GC ──
 

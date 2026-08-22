@@ -80,13 +80,17 @@ def start_worker(fn: Callable, *,
                  on_log: Optional[Callable] = None,
                  on_finished: Optional[Callable] = None,
                  on_error: Optional[Callable] = None,
-                 args=(), kwargs=None) -> GenericWorker:
+                 args=(), kwargs=None, **fn_kwargs) -> GenericWorker:
     """Convenience: build a worker, wire signals, and start it on the pool.
 
-    Returns the worker (keep a reference if you need to manage its lifetime).
+    ``fn`` 的参数既可以用 ``kwargs=`` 字典传，也可以直接作为关键字参数
+    散传（后者与所有既有调用点的书写习惯一致）。Returns the worker
+    (keep a reference if you need to manage its lifetime).
     """
     from PySide6.QtCore import QThreadPool
-    worker = GenericWorker(fn, *args, **(kwargs or {}))
+    merged = dict(kwargs or {})
+    merged.update(fn_kwargs)
+    worker = GenericWorker(fn, *args, **merged)
     if on_progress:
         worker.signals.progress.connect(on_progress)
     if on_log:

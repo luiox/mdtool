@@ -1,22 +1,15 @@
-"""Image check tab — PySide6 port of ``tabs/image_check.py``.
+"""Image check page — 两遍扫描（失效链接 + 重复检测）。
 
-Two-pass scan (broken links, then duplicate detection) over the project root.
-The scan algorithm is moved into a worker function and run on the thread pool
-via :class:`qtui.workers.GenericWorker`; progress/log flow back as Qt signals
-so the UI stays responsive on large libraries.
+扫描算法在 worker 函数中保持逐字不变，经线程池运行；进度与日志以
+Qt 信号回流，大库扫描不冻结界面。日志走全局 logbus。
 """
 
 import csv
 from pathlib import Path
-from typing import Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QButtonGroup,
     QCheckBox,
     QFileDialog,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -30,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qtui.widgets import BaseTab, LogPanel
+from qtui.widgets import BaseTab
 from qtui.workers import start_worker
 from utils import (
     HAVE_LIBMARKDOWN,
@@ -54,8 +47,8 @@ class ImageCheckTab(BaseTab):
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 6)
-        outer.setSpacing(6)
+        outer.setContentsMargins(18, 0, 18, 14)
+        outer.setSpacing(8)
 
         # options
         gb = QGroupBox("扫描选项")
@@ -90,9 +83,12 @@ class ImageCheckTab(BaseTab):
 
         # actions
         bar = QHBoxLayout()
-        b = QPushButton("开始校验"); b.clicked.connect(self.start_check)
-        bar.addWidget(b)
-        b = QPushButton("导出报告 (CSV)"); b.clicked.connect(self.export_report)
+        start_btn = QPushButton("开始校验")
+        start_btn.setProperty("variant", "primary")
+        start_btn.clicked.connect(self.start_check)
+        bar.addWidget(start_btn)
+        b = QPushButton("导出报告 (CSV)")
+        b.clicked.connect(self.export_report)
         bar.addWidget(b)
         bar.addStretch(1)
         outer.addLayout(bar)
@@ -118,18 +114,16 @@ class ImageCheckTab(BaseTab):
         self.dup_tree.setColumnWidth(2, 80); self.dup_tree.setColumnWidth(3, 200)
         outer.addWidget(self.dup_tree, 1)
 
-        self.log_panel = LogPanel(height_lines=5)
-        outer.addWidget(self.log_panel)
-
-    def log(self, msg: str, level: str = "INFO"):
-        self.log_panel.append_line(msg, level)
-
     def _selected_exts(self) -> set:
         return {ext for ext, cb in self.ext_checks.items() if cb.isChecked()}
 
+    def _set_buttons_enabled(self, enabled: bool):
+        for w in self.findChildren(QPushButton):
+            w.setEnabled(enabled)
+
     def start_check(self):
         if not self.root_dir:
-            QMessageBox.warning(self, "警告", "请先在工具栏选择项目根目录")
+            QMessageBox.warning(self, "警告", "请先在顶栏选择知识库根目录")
             return
         exts = self._selected_exts()
         if not exts:
@@ -148,25 +142,21 @@ class ImageCheckTab(BaseTab):
         self.log("开始校验...")
 
         # Disable while running to avoid re-entry.
-        for w in self.findChildren(QPushButton):
-            w.setEnabled(False)
+        self._set_buttons_enabled(False)
 
         start_worker(
             _scan_job,
             root_dir=self.root_dir, exts=exts, use_std=use_std,
             use_obs=use_obs, mode=mode,
-            on_progress=lambda cur, tot: self.progress.setMaximum(tut_safe(tot)) or self.progress.setValue(cur),
-            on_log=lambda m, l: self.log(m, l),
+            on_progress=lambda cur, tot: (self.progress.setMaximum(total_safe(tot)),
+                                          self.progress.setValue(cur)),
+            on_log=self.log,
             on_finished=self._on_scan_finished,
-            on_error=lambda e: (self.log(f"校验出错: {e}", "ERROR"), self._reenable()),
+            on_error=lambda e: (self.log(f"校验出错: {e}", "ERROR"), self._set_buttons_enabled(True)),
         )
 
-    def _reenable(self):
-        for w in self.findChildren(QPushButton):
-            w.setEnabled(True)
-
     def _on_scan_finished(self, result):
-        self._reenable()
+        self._set_buttons_enabled(True)
         if result is None:
             return
         self.broken_links = result["broken"]
@@ -209,7 +199,7 @@ class ImageCheckTab(BaseTab):
             QMessageBox.critical(self, "导出失败", str(e))
 
 
-def tut_safe(total: int) -> int:
+def total_safe(total: int) -> int:
     return total if total > 0 else 1
 
 

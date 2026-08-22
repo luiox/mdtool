@@ -1,62 +1,60 @@
-"""Shared Qt widgets used across all tabs.
+"""Shared Qt building blocks used across all pages.
 
-Replaces the per-tab duplicated idioms from the tkinter version:
-- the disabled ``tk.Text`` log console → :class:`LogPanel`
-- the implicit ``(notebook, app)`` tab contract → :class:`BaseTab`
+- :class:`BaseTab` — 页面统一契约（``set_root_dir`` / ``shutdown``），
+  ``log()`` 直接发布到全局 :mod:`qtui.logbus`，页面不再各自持有日志面板。
+- :class:`SearchBar` / :class:`PathRow` — 两个高频重复模式（搜索行、
+  路径选择行）的组件化收敛。
+- 视觉状态一律走动态属性 + theme.py 的 QSS 属性选择器
+  （``[muted="true"]``、``[severity="..."]``），禁止内联样式表；
+  运行时改属性后必须调用 :func:`repolish` 让 QSS 重新求值。
 """
 
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QFormLayout,
+    QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QTextEdit,
-    QVBoxLayout,
     QWidget,
 )
 
+from qtui.logbus import get_log_bus
 
-class LogPanel(QTextEdit):
-    """A read-only monospaced log console with timestamped lines.
 
-    Drop-in replacement for the ``self.log_text`` disabled ``tk.Text`` +
-    ``self.log(msg)`` idiom repeated in every tkinter tab. ``append`` already
-    adds a newline in Qt, so callers pass a single line.
-    """
+def repolish(widget: QWidget) -> None:
+    """Re-evaluate QSS attribute selectors after a dynamic property change."""
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
 
-    def __init__(self, parent=None, height_lines: int = 6):
-        super().__init__(parent)
-        self.setReadOnly(True)
-        self.setFont(QFont("Consolas", 9))
-        self._height_lines = height_lines
 
-    def sizeHint(self):  # noqa: N802 - Qt override
-        fm = self.fontMetrics()
-        return self.minimumSizeHint()
+def muted_label(text: str = "") -> QLabel:
+    """A gray secondary-text label (QSS: ``QLabel[muted="true"]``)."""
+    lab = QLabel(text)
+    lab.setProperty("muted", True)
+    return lab
 
-    def append_line(self, msg: str, level: str = "INFO"):
-        ts = datetime.now().strftime("%H:%M:%S")
-        self.append(f"[{ts}] [{level}] {msg}")
-        self.moveCursor(QTextCursor.MoveOperation.End)
 
-    def clear_log(self):
-        self.clear()
+def set_severity(label: QLabel, severity: Optional[str]) -> None:
+    """Set ``[severity="success|warning|error"]`` (None clears the state)."""
+    if severity is None:
+        label.setProperty("severity", "")
+    else:
+        label.setProperty("severity", severity)
+    repolish(label)
 
 
 class BaseTab(QWidget):
-    """Base class for every tab.
+    """Base class for every page.
 
-    Replaces the tkinter ``__init__(notebook, app)`` + ``self.frame`` contract.
-    Subclasses build their UI into ``self`` (a QWidget) directly. The main
-    window drives every tab through :meth:`set_root_dir` and :meth:`shutdown`,
-    so there is no per-tab ``on_root_dir_changed`` name to remember.
+    The main window drives pages through :meth:`set_root_dir` and
+    :meth:`shutdown`; logging flows through the global log bus so pages
+    carry no log UI of their own.
     """
 
     def __init__(self, parent=None):
@@ -67,7 +65,7 @@ class BaseTab(QWidget):
     # ── hooks (default no-ops) ──
 
     def set_root_dir(self, root_dir: Optional[Path]):
-        """Called when the user picks/changes the project root."""
+        """Called when the user picks/changes the knowledge-base root."""
         self.root_dir = root_dir
 
     def shutdown(self):
@@ -77,43 +75,89 @@ class BaseTab(QWidget):
     # ── convenience ──
 
     def log(self, msg: str, level: str = "INFO"):
-        """Override or set ``self.log_panel`` to enable logging."""
-        panel = getattr(self, "log_panel", None)
-        if isinstance(panel, LogPanel):
-            panel.append_line(msg, level)
+        get_log_bus().publish(msg, level)
 
 
-def hbox(parent=None, *widgets, spacing=4, margins=(0, 0, 0, 0)) -> QHBoxLayout:
-    """Quick horizontal layout helper to reduce boilerplate."""
-    lay = QHBoxLayout(parent)
-    lay.setSpacing(spacing)
-    lay.setContentsMargins(*margins)
-    for w in widgets:
-        lay.addWidget(w)
-    return lay
+class SearchBar(QWidget):
+    """搜索行：输入框（正则提示）+ 范围下拉 + 搜索/清空。
+
+    notes_browser 与 file_browser 原本各写一份完全相同的布局，收敛于此。
+    """
+
+    search_requested = Signal(str, str)  # pattern, scope
+
+    def __init__(self, scopes=("文件名", "正文", "文件名+正文"),
+                 show_scope: bool = True, show_clear: bool = True, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.edit = QLineEdit()
+        self.edit.setPlaceholderText("搜索…（支持正则）")
+        self.edit.returnPressed.connect(self._emit_search)
+        lay.addWidget(self.edit, 1)
+        self.scope = QComboBox()
+        self.scope.addItems(list(scopes))
+        self.scope.setVisible(show_scope)
+        lay.addWidget(self.scope)
+        btn = QPushButton("搜索")
+        btn.setProperty("variant", "primary")
+        btn.clicked.connect(self._emit_search)
+        lay.addWidget(btn)
+        if show_clear:
+            clear = QPushButton("清空")
+            clear.clicked.connect(self.clear_input)
+            lay.addWidget(clear)
+
+    def _emit_search(self):
+        self.search_requested.emit(self.edit.text().strip(), self.scope.currentText())
+
+    def text(self) -> str:
+        return self.edit.text().strip()
+
+    def scope_text(self) -> str:
+        return self.scope.currentText()
+
+    def clear_input(self):
+        self.edit.clear()
+        self.edit.setFocus()
 
 
-def vbox(parent=None, *widgets, spacing=4, margins=(0, 0, 0, 0)) -> QVBoxLayout:
-    lay = QVBoxLayout(parent)
-    lay.setSpacing(spacing)
-    lay.setContentsMargins(*margins)
-    for w in widgets:
-        lay.addWidget(w)
-    return lay
+class PathRow(QWidget):
+    """路径输入 + 浏览按钮。``mode``: dir | open | save。"""
 
+    path_picked = Signal(str)
 
-def labeled_row(label_text: str, widget: QWidget, label_width: int = 14,
-                parent=None) -> QHBoxLayout:
-    """A label + widget row matching the old ``ttk.Label(width=14)`` layout."""
-    lay = QHBoxLayout(parent)
-    lab = QLabel(label_text)
-    lab.setMinimumWidth(label_width * 7)  # rough char→px; tuned visually later
-    lay.addWidget(lab)
-    lay.addWidget(widget, stretch=1)
-    return lay
+    def __init__(self, path: str = "", mode: str = "dir",
+                 dialog_title: str = "选择目录", file_filter: str = "",
+                 placeholder: str = "", parent=None):
+        super().__init__(parent)
+        self.mode = mode
+        self.dialog_title = dialog_title
+        self.file_filter = file_filter
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.edit = QLineEdit(path)
+        self.edit.setPlaceholderText(placeholder)
+        lay.addWidget(self.edit, 1)
+        btn = QPushButton("浏览…")
+        btn.clicked.connect(self.browse)
+        lay.addWidget(btn)
 
+    def text(self) -> str:
+        return self.edit.text().strip()
 
-def make_button(text: str, slot, parent=None) -> QPushButton:
-    b = QPushButton(text, parent)
-    b.clicked.connect(slot)
-    return b
+    def set_path(self, path: str):
+        self.edit.setText(path)
+
+    def browse(self):
+        if self.mode == "dir":
+            p = QFileDialog.getExistingDirectory(self, self.dialog_title)
+        elif self.mode == "save":
+            p, _ = QFileDialog.getSaveFileName(self, self.dialog_title, "", self.file_filter)
+        else:
+            p, _ = QFileDialog.getOpenFileName(self, self.dialog_title, "", self.file_filter)
+        if p:
+            self.edit.setText(p)
+            self.path_picked.emit(p)

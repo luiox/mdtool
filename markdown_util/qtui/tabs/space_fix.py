@@ -1,16 +1,13 @@
-"""Space-fix tab — PySide6 port of ``tabs/space_fix.py``.
+"""Space-fix page — 四步向导：修复「assets/xxx yyy.png」带空格图片链接。
 
-A 4-step wizard: pick markdown root → pick the messy image source dir →
-match link filenames against the source dir → execute (move files, rewrite
-links replacing spaces with underscores). Logic preserved verbatim; widgets
-ported to QListWidget (multi-select) + QTreeWidget.
+选 Markdown 根 → 选混乱图片源目录 → 文件名匹配 → 执行（移动文件并
+改写链接，空格替换为下划线）。逻辑保持原样；日志走全局 logbus。
 """
 
 import re
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -25,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qtui.widgets import BaseTab, LogPanel
+from qtui.widgets import BaseTab, repolish
 
 
 class SpaceFixTab(BaseTab):
@@ -40,28 +37,34 @@ class SpaceFixTab(BaseTab):
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 6)
-        outer.setSpacing(6)
+        outer.setContentsMargins(18, 0, 18, 14)
+        outer.setSpacing(8)
 
         r1 = QHBoxLayout()
-        b = QPushButton("1. 选择 Markdown 根目录"); b.clicked.connect(self.select_md_root)
+        b = QPushButton("1. 选择 Markdown 根目录")
+        b.clicked.connect(self.select_md_root)
         r1.addWidget(b)
-        self.md_root_label = QLabel("未选择"); self.md_root_label.setStyleSheet("color: gray;")
-        r1.addWidget(self.md_root_label); r1.addStretch(1)
+        self.md_root_label = QLabel("未选择")
+        self.md_root_label.setProperty("muted", True)
+        r1.addWidget(self.md_root_label)
+        r1.addStretch(1)
         outer.addLayout(r1)
 
         r2 = QHBoxLayout()
         b = QPushButton("2. 选择混乱图片源目录（图片目前存放的杂乱位置）")
         b.clicked.connect(self.select_messy_img_root)
         r2.addWidget(b)
-        self.messy_label = QLabel("未选择"); self.messy_label.setStyleSheet("color: gray;")
-        r2.addWidget(self.messy_label); r2.addStretch(1)
+        self.messy_label = QLabel("未选择")
+        self.messy_label.setProperty("muted", True)
+        r2.addWidget(self.messy_label)
+        r2.addStretch(1)
         outer.addLayout(r2)
 
         r3 = QHBoxLayout()
         b = QPushButton("3. 文件名匹配（基于原始路径定位源文件）")
         b.clicked.connect(self.match_filenames)
-        r3.addWidget(b); r3.addStretch(1)
+        r3.addWidget(b)
+        r3.addStretch(1)
         outer.addLayout(r3)
 
         outer.addWidget(QLabel("原始匹配链接（可多选）:"))
@@ -80,17 +83,18 @@ class SpaceFixTab(BaseTab):
         outer.addWidget(self.tree, 1)
 
         r4 = QHBoxLayout()
-        b = QPushButton("4. 执行（移动图片并更新链接）"); b.clicked.connect(self.execute)
-        r4.addWidget(b)
-        b = QPushButton("清空日志"); b.clicked.connect(lambda: self.log_panel.clear_log())
-        r4.addWidget(b); r4.addStretch(1)
+        exec_btn = QPushButton("4. 执行（移动图片并更新链接）")
+        exec_btn.setProperty("variant", "primary")
+        exec_btn.clicked.connect(self.execute)
+        r4.addWidget(exec_btn)
+        r4.addStretch(1)
         outer.addLayout(r4)
 
-        self.log_panel = LogPanel(height_lines=6)
-        outer.addWidget(self.log_panel)
-
-    def log(self, msg: str, level: str = "INFO"):
-        self.log_panel.append_line(msg, level)
+    def _mark_picked(self, label: QLabel, path_text: str):
+        """路径已选中：取消灰色次要态。"""
+        label.setText(path_text)
+        label.setProperty("muted", False)
+        repolish(label)
 
     # ── steps 1 & 2 ──
 
@@ -99,8 +103,7 @@ class SpaceFixTab(BaseTab):
         path = QFileDialog.getExistingDirectory(self, "选择包含 Markdown 文件的根目录", initial)
         if path:
             self.md_root = Path(path)
-            self.md_root_label.setText(str(self.md_root))
-            self.md_root_label.setStyleSheet("color: black;")
+            self._mark_picked(self.md_root_label, str(self.md_root))
             self.log(f"Markdown 根目录已选择: {self.md_root}")
             self.scan_md_files()
 
@@ -108,8 +111,7 @@ class SpaceFixTab(BaseTab):
         path = QFileDialog.getExistingDirectory(self, "选择混乱图片源目录（包含所有待整理图片的顶层文件夹）")
         if path:
             self.messy_img_root = Path(path)
-            self.messy_label.setText(str(self.messy_img_root))
-            self.messy_label.setStyleSheet("color: black;")
+            self._mark_picked(self.messy_label, str(self.messy_img_root))
             self.log(f"混乱图片源目录已选择: {self.messy_img_root}")
 
     def scan_md_files(self):

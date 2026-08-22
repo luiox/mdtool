@@ -1,27 +1,23 @@
-"""Migrate tab — PySide6 port of ``tabs/migrate.py``.
+"""Migrate page — 本地/Obsidian 图片引用 → 8765 托管 URL。
 
-Turns local/Obsidian image references into the hosted ``http://127.0.0.1:8765``
-form by copying images into the hosting dir and rewriting links. The pure
-analysis/migration logic (:func:`_build_migrate_items`, :func:`_do_migrate_file`)
-is preserved verbatim; only the widgets change. Batch migration runs on the
-thread pool so big file lists don't freeze the UI.
+把图片复制进托管目录并改写链接。分析与迁移的纯逻辑
+（:func:`_build_migrate_items`、:func:`_do_migrate_file`）保持原样；
+批量迁移跑线程池，日志走全局 logbus。入口：文件浏览器右键
+「迁移图片到图床」。
 """
 
 import json
 import mimetypes
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QButtonGroup,
     QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QRadioButton,
     QTreeWidget,
@@ -30,8 +26,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qtui.widgets import BaseTab, LogPanel
+from qtui.widgets import BaseTab
 from qtui.workers import start_worker
+from server.meta_db import MetaDB
 from utils import (
     HAVE_LIBMARKDOWN,
     extract_image_links,
@@ -41,7 +38,6 @@ from utils import (
     make_image_filename_from_mtime,
     resolve_image_path,
 )
-from server.meta_db import MetaDB
 
 HOSTING_CONFIG = Path.home() / ".monocodes_media.json"
 EXT_NAMES = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"]
@@ -61,10 +57,10 @@ class MigrateTab(BaseTab):
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 6)
-        outer.setSpacing(6)
+        outer.setContentsMargins(18, 0, 18, 14)
+        outer.setSpacing(8)
 
-        # file list bar
+        # file list + actions
         top = QHBoxLayout()
         top.addWidget(QLabel("待处理文件:"))
         self.file_list = QListWidget()
@@ -72,14 +68,16 @@ class MigrateTab(BaseTab):
         self.file_list.currentRowChanged.connect(self._on_file_selected)
         top.addWidget(self.file_list, 1)
         bcol = QVBoxLayout()
-        b = QPushButton("分析全部"); b.clicked.connect(self.analyze_all)
+        b = QPushButton("分析全部")
+        b.clicked.connect(self.analyze_all)
         bcol.addWidget(b)
-        b = QPushButton("清空列表"); b.clicked.connect(self._clear_files)
+        b = QPushButton("清空列表")
+        b.clicked.connect(self._clear_files)
         bcol.addWidget(b)
         top.addLayout(bcol)
         outer.addLayout(top)
-        self.file_label = QLabel("(从文件浏览器右键选择文件或目录)")
-        self.file_label.setStyleSheet("color: gray;")
+        self.file_label = QLabel("(从文件浏览器右键「迁移图片到图床」选择)")
+        self.file_label.setProperty("muted", True)
         outer.addWidget(self.file_label)
 
         # options
@@ -88,9 +86,9 @@ class MigrateTab(BaseTab):
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("解析引擎:"))
         self.rb_regex = QRadioButton("正则表达式"); self.rb_regex.setChecked(True)
-        self.rb_regex.toggled.connect(lambda on: self._sync_mode())
+        self.rb_regex.toggled.connect(lambda _on: self._sync_mode())
         self.rb_ast = QRadioButton("AST 解析")
-        self.rb_ast.toggled.connect(lambda on: self._sync_mode())
+        self.rb_ast.toggled.connect(lambda _on: self._sync_mode())
         if not HAVE_LIBMARKDOWN:
             self.rb_ast.setEnabled(False)
         r1.addWidget(self.rb_regex); r1.addWidget(self.rb_ast); r1.addStretch(1)
@@ -116,9 +114,16 @@ class MigrateTab(BaseTab):
 
         # action bar
         bar = QHBoxLayout()
-        b = QPushButton("分析当前文件"); b.clicked.connect(self.analyze_one); bar.addWidget(b)
-        b = QPushButton("迁移当前文件"); b.clicked.connect(self.migrate_one); bar.addWidget(b)
-        b = QPushButton("迁移全部"); b.clicked.connect(self.migrate_all); bar.addWidget(b)
+        b = QPushButton("分析当前文件")
+        b.clicked.connect(self.analyze_one)
+        bar.addWidget(b)
+        b = QPushButton("迁移当前文件")
+        b.clicked.connect(self.migrate_one)
+        bar.addWidget(b)
+        b = QPushButton("迁移全部")
+        b.setProperty("variant", "primary")
+        b.clicked.connect(self.migrate_all)
+        bar.addWidget(b)
         bar.addStretch(1)
         outer.addLayout(bar)
 
@@ -130,12 +135,6 @@ class MigrateTab(BaseTab):
         self.tree.setColumnWidth(0, 300); self.tree.setColumnWidth(1, 300); self.tree.setColumnWidth(2, 120)
         self.tree.setRootIsDecorated(False)
         outer.addWidget(self.tree, 1)
-
-        self.log_panel = LogPanel(height_lines=8)
-        outer.addWidget(self.log_panel)
-
-    def log(self, msg: str, level: str = "INFO"):
-        self.log_panel.append_line(msg, level)
 
     def _sync_mode(self):
         self._mode = "ast" if self.rb_ast.isChecked() else "regex"
@@ -154,12 +153,10 @@ class MigrateTab(BaseTab):
             for f in found:
                 self._add_file(f)
             self.file_label.setText(f"目录: {path} ({len(found)} 个 .md)")
-            self.file_label.setStyleSheet("color: black;")
             self.log(f"已加载目录 {path}，找到 {len(found)} 个 .md 文件")
         elif path.suffix == ".md":
             self._add_file(path)
             self.file_label.setText(str(path))
-            self.file_label.setStyleSheet("color: black;")
             self.log(f"已加载文件: {path.name}")
         if self._file_list:
             self.file_list.setCurrentRow(0)
@@ -174,8 +171,7 @@ class MigrateTab(BaseTab):
         self.file_list.clear()
         self._current_index = -1
         self.tree.clear()
-        self.file_label.setText("(从文件浏览器右键选择文件或目录)")
-        self.file_label.setStyleSheet("color: gray;")
+        self.file_label.setText("(从文件浏览器右键「迁移图片到图床」选择)")
 
     def _on_file_selected(self, row):
         if 0 <= row < len(self._file_list):
@@ -189,7 +185,11 @@ class MigrateTab(BaseTab):
             pass
         return {}
 
-    # ── analysis (pure, from the tkinter version) ──
+    def _set_buttons_enabled(self, enabled: bool):
+        for w in self.findChildren(QPushButton):
+            w.setEnabled(enabled)
+
+    # ── analysis (pure, preserved verbatim) ──
 
     def _build_migrate_items(self, md: Path, content: str, cfg: dict) -> list[dict]:
         host = cfg.get("host", "127.0.0.1")
@@ -267,7 +267,7 @@ class MigrateTab(BaseTab):
                 changed = True
                 self.log(f"  替换: {old_md[:30]}…")
             else:
-                self.log(f"  警告: 未匹配到原文")
+                self.log("  警告: 未匹配到原文", "WARNING")
         meta.close()
         if changed:
             md.write_text(content, encoding="utf-8")
@@ -289,11 +289,11 @@ class MigrateTab(BaseTab):
         md = self._file_list[self._current_index]
         cfg = self._read_hosting_config()
         self.tree.clear()
-        self.log(f"\n分析: {md.name}")
+        self.log(f"分析: {md.name}")
         try:
             content = md.read_text(encoding="utf-8")
         except Exception as e:
-            self.log(f"  ❌ 读取失败: {e}")
+            self.log(f"  ❌ 读取失败: {e}", "ERROR")
             return
         items = self._build_migrate_items(md, content, cfg)
         self._analysis = items
@@ -319,16 +319,16 @@ class MigrateTab(BaseTab):
             return
         cfg = self._read_hosting_config()
         if not cfg.get("media_root"):
-            QMessageBox.warning(self, "警告", "媒体服务器目录未配置，请在「本地媒体服务器」Tab 中配置")
+            QMessageBox.warning(self, "警告", "媒体服务器目录未配置，请在「媒体服务器」页配置")
             return
         if not any(it["status"] == "待迁移" for it in self._analysis):
             QMessageBox.information(self, "提示", "当前文件没有待迁移的图片")
             return
-        self.log(f"\n迁移: {md.name}")
+        self.log(f"迁移: {md.name}")
         try:
             self._do_migrate_file(md, self._analysis, cfg)
         except Exception as e:
-            self.log(f"  ❌ 迁移失败: {e}")
+            self.log(f"  ❌ 迁移失败: {e}", "ERROR")
             QMessageBox.critical(self, "迁移失败", f"{md.name} 处理出错:\n{e}\n已停止")
             return
         self._render_items(self._analysis, mark_done=True)
@@ -344,25 +344,19 @@ class MigrateTab(BaseTab):
             return
         self._sync_mode()
         files = list(self._file_list)
-        self.log(f"\n{'='*40}\n批量迁移: {len(files)} 个文件\n{'='*40}")
-        # Disable buttons during the worker run.
-        for w in self.findChildren(QPushButton):
-            w.setEnabled(False)
+        self.log(f"批量迁移: {len(files)} 个文件")
+        self._set_buttons_enabled(False)
         start_worker(
             _migrate_all_job,
             files=files, cfg=cfg, mode=self._mode, use_std=self._std,
             use_obs=self._obs, exts=self._exts,
-            on_log=lambda m, l: self.log(m, l),
-            on_finished=lambda _: (self.log(f"\n{'='*40}\n批量迁移全部完成 ({len(files)} 个文件)"),
-                                    self._reenable()),
+            on_log=self.log,
+            on_finished=lambda _: (self.log(f"批量迁移全部完成（{len(files)} 个文件）"),
+                                   self._set_buttons_enabled(True)),
             on_error=lambda e: (self.log(f"  ❌ 批量迁移中止: {e}", "ERROR"),
                                 QMessageBox.critical(self, "批量迁移中止", e),
-                                self._reenable()),
+                                self._set_buttons_enabled(True)),
         )
-
-    def _reenable(self):
-        for w in self.findChildren(QPushButton):
-            w.setEnabled(True)
 
 
 def _migrate_all_job(files: list, cfg: dict, mode: str, use_std: bool,
@@ -371,7 +365,7 @@ def _migrate_all_job(files: list, cfg: dict, mode: str, use_std: bool,
     loop without touching widgets; mirrors :meth:`MigrateTab._do_migrate_file`
     but with a local MetaDB per file (same as the original)."""
     for idx, md in enumerate(files):
-        report("log", msg=f"\n[{idx+1}/{len(files)}] {md.name}")
+        report("log", msg=f"[{idx+1}/{len(files)}] {md.name}")
         try:
             content = md.read_text(encoding="utf-8")
         except Exception as e:
