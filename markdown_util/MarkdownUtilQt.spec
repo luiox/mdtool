@@ -11,7 +11,14 @@ from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
+import os
+
 datas = []
+# 根 pyproject.toml 随包打入：frozen 态 _version.py 从解包目录读版本号，
+# 保持"根 pyproject 是版本唯一权威源"（build 期环境变量注入不可靠）。
+_root_pyproject = os.path.join(SPECPATH, os.pardir, 'pyproject.toml')
+if os.path.exists(_root_pyproject):
+    datas.append((_root_pyproject, '.'))
 binaries = []
 hiddenimports = [
     # backend (untouched by the Qt port)
@@ -24,7 +31,11 @@ hiddenimports = [
     'qtui.widgets',
     'qtui.icons',
     'qtui.workers',
+    'qtui.theme',
+    'qtui.logbus',
     'qtui.main_window',
+    'qtui.tabs.library',
+    'qtui.tabs.search',
     'qtui.tabs.notes_browser',
     'qtui.tabs.file_browser',
     'qtui.tabs.media_server',
