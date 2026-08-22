@@ -44,12 +44,23 @@ hiddenimports = [
     'qtui.tabs.migrate',
 ]
 
-# Collect data/binaries/hiddenimports for the heavy third-party packages.
-for pkg in ('libmarkdown', 'watchdog', 'PySide6', 'shiboken6'):
+# 轻量第三方包整体收集；PySide6 不做 collect_all（会把 WebEngine/3D 等
+# 全部拖进来，onefile 体积 240MB+），改为显式列出用到的 Qt 模块，
+# 插件（platforms/imageformats/iconengines）由 PyInstaller 的 Qt hook
+# 按已用模块自动带出。
+for pkg in ('libmarkdown', 'watchdog'):
     tmp = collect_all(pkg)
     datas += tmp[0]
     binaries += tmp[1]
     hiddenimports += tmp[2]
+
+hiddenimports += [
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
+    'PySide6.QtSvg',
+    'shiboken6',
+]
 
 a = Analysis(
     ['main_qt.py'],

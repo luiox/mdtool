@@ -63,9 +63,12 @@ hiddenimports = [
     'qtui.tabs.notes_browser','qtui.tabs.file_browser','qtui.tabs.media_server',
     'qtui.tabs.space_fix','qtui.tabs.image_check','qtui.tabs.migrate',
 ]
-for pkg in ('libmarkdown','watchdog','PySide6','shiboken6'):
+for pkg in ('libmarkdown','watchdog'):
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+# PySide6 只带用到的模块（全量 collect 会拖入 WebEngine/3D 等，体积 240MB+）
+hiddenimports += ['PySide6.QtCore','PySide6.QtGui','PySide6.QtWidgets',
+                  'PySide6.QtSvg','shiboken6']
 a = Analysis(['main_qt.py'], pathex=['.'], binaries=binaries, datas=datas,
              hiddenimports=hiddenimports, noarchive=False, optimize=0)
 pyz = PYZ(a.pure)
