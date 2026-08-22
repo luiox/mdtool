@@ -134,12 +134,6 @@ QPushButton[variant="danger"] {{
     color: {p.danger};
     border-color: {p.border};
 }}
-QPushButton[toggle="source"]:checked {{
-    background: {p.accent};
-    border-color: {p.accent};
-    color: {p.on_accent};
-    font-weight: 600;
-}}
 
 /* ── 输入控件 ── */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{

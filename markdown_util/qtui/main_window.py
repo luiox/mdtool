@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self._nav_keys: list[str] = []
         self._build_shell()
         self.switch_page("library")  # 默认落在笔记库
+        self.update_title()
         self._setup_tray()
 
     # ── 外壳 ──
@@ -141,15 +142,16 @@ class MainWindow(QMainWindow):
         h.addWidget(self.page_title)
         h.addSpacing(20)
 
-        h.addWidget(muted_label("知识库根目录:"))
-        self.root_label = muted_label("未选择")
-        self.root_label.setMaximumWidth(360)
-        h.addWidget(self.root_label)
+        # 数据源：两个按钮即入口——散装选目录、db 选 .db 文件，选完即切；
+        # 当前在哪个源由窗口标题标注，散装根目录路径挂在按钮 tooltip 上
+        self.src_fs = QPushButton("散装目录")
+        self.src_fs.clicked.connect(self._on_src_fs_clicked)
+        self.src_db = QPushButton("db 容器")
+        self.src_db.clicked.connect(self._on_src_db_clicked)
+        h.addWidget(self.src_fs)
+        h.addWidget(self.src_db)
 
         h.addStretch(1)
-        pick = QPushButton("选择目录…")
-        pick.clicked.connect(self.select_root_dir)
-        h.addWidget(pick)
         return bar
 
     def _build_pages(self):
@@ -196,22 +198,51 @@ class MainWindow(QMainWindow):
     def library_page(self):
         return self._pages["library"]["tab"]
 
+    def _on_src_fs_clicked(self):
+        """「散装目录」按钮：选根目录，取消则不切换。"""
+        if self.select_root_dir() is None:
+            return
+        self.library_page._set_mode("fs")
+        self.update_title()
+
+    def _on_src_db_clicked(self):
+        """「db 容器」按钮：选 .db 文件（可选已有或输入新文件名），取消则不切换。"""
+        start_dir = str(self.library_page.config.get("db_path") or "")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "选择已有 .db 或输入新文件名（新建）", start_dir,
+            "SQLite 数据库 (*.db);;所有文件 (*.*)")
+        if not path:
+            return
+        self.library_page.open_db_file(path)
+        if self.library_page.db is None:  # 打开失败（open_db_file 内已记日志）
+            return
+        self.library_page._set_mode("db")
+        self.update_title()
+
+    def update_title(self):
+        title = f"mdtool v{get_version()}"
+        if self.library_page.mode == "db":
+            title += " - db mode"
+        self.setWindowTitle(title)
+
     def open_db_note(self, note_id: int):
         """搜索页双击 db 结果 → 切回笔记库页并打开编辑会话。"""
         self.switch_page("library")
         lib = self.library_page
         lib._set_mode("db")
+        self.update_title()
         lib._db_open_note_for_edit(note_id)
 
-    def select_root_dir(self):
+    def select_root_dir(self) -> Optional[Path]:
+        """弹目录选择；返回所选路径，取消返回 None。"""
         path = QFileDialog.getExistingDirectory(self, "选择知识库根目录")
         if not path:
-            return
+            return None
         self.root_dir = Path(path)
-        self.root_label.setText(str(self.root_dir))
-        self.root_label.setToolTip(str(self.root_dir))
+        self.src_fs.setToolTip(f"当前知识库根目录: {self.root_dir}")
         for tab in self.all_tabs():
             tab.set_root_dir(self.root_dir)
+        return self.root_dir
 
     @property
     def root_dir(self) -> Optional[Path]:

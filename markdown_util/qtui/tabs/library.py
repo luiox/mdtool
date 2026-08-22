@@ -18,28 +18,23 @@ from typing import Optional
 from PySide6.QtCore import QSize, Qt, QThread
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QHBoxLayout,
     QInputDialog,
-    QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
-    QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
-    QWidget,
 )
 
 from qtui.icons import file_icon, folder_icon
 from qtui.tabs import file_browser as fb
 from qtui.tabs import notes_browser as nb
-from qtui.widgets import BaseTab, PathRow, muted_label
+from qtui.widgets import BaseTab, PathRow
 from qtui.workers import start_worker
 
 
@@ -66,98 +61,26 @@ class LibraryPage(BaseTab):
     # ── UI ──
 
     def _build_ui(self):
+        """纯树页面：无工具行、无模式切换（切换在顶栏，状态在窗口标题），
+        所有操作经右键菜单（含空白处的全局菜单）。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 0, 18, 14)
-        root.setSpacing(8)
 
-        # 源切换 + 模式相关动作簇
-        bar = QWidget()
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(6)
-
-        self.btn_fs = QPushButton("散装目录", checkable=True)
-        self.btn_fs.setProperty("toggle", "source")
-        self.btn_db = QPushButton("笔记库容器", checkable=True)
-        self.btn_db.setProperty("toggle", "source")
-        self._src_group = QButtonGroup(self)
-        self._src_group.addButton(self.btn_fs, 0)
-        self._src_group.addButton(self.btn_db, 1)
-        self._src_group.idClicked.connect(lambda i: self._set_mode("fs" if i == 0 else "db"))
-        h.addWidget(self.btn_fs)
-        h.addWidget(self.btn_db)
-        h.addSpacing(12)
-
-        self.fs_actions = QWidget()
-        fa = QHBoxLayout(self.fs_actions)
-        fa.setContentsMargins(0, 0, 0, 0)
-        fa.setSpacing(6)
-        b = QPushButton("打包全库 ZIP")
-        b.setProperty("variant", "primary")
-        b.clicked.connect(self.pack_all_zip)
-        fa.addWidget(b)
-        b = QPushButton("刷新")
-        b.clicked.connect(self.refresh_tree)
-        fa.addWidget(b)
-        h.addWidget(self.fs_actions)
-
-        self.db_actions = QWidget()
-        da = QHBoxLayout(self.db_actions)
-        da.setContentsMargins(0, 0, 0, 0)
-        da.setSpacing(6)
-        b = QPushButton("打开/新建笔记库")
-        b.setProperty("variant", "primary")
-        b.clicked.connect(self.choose_library)
-        da.addWidget(b)
-        for text, slot in [
-            ("新建笔记", self.new_note),
-            ("导入文件夹", self.import_folder),
-            ("导出为文件夹", self.export_folder),
-            ("刷新", self.refresh_tree),
-        ]:
-            b = QPushButton(text)
-            b.clicked.connect(slot)
-            da.addWidget(b)
-        h.addWidget(self.db_actions)
-
-        h.addStretch(1)
-        self.src_label = muted_label("")
-        h.addWidget(self.src_label)
-        root.addWidget(bar)
-
-        # 目录树（搜索已拆分为独立页面，树独占整页）
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("笔记")
         self.tree.setIconSize(QSize(16, 16))
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemDoubleClicked.connect(self._on_tree_double_click)
-        root.addWidget(self.tree, 1)
+        root.addWidget(self.tree)
 
     # ── 模式切换 ──
 
     def _set_mode(self, mode: str):
         self.mode = mode
-        self.btn_fs.setChecked(mode == "fs")
-        self.btn_db.setChecked(mode == "db")
-        self.fs_actions.setVisible(mode == "fs")
-        self.db_actions.setVisible(mode == "db")
-        if mode == "fs":
-            self.tree.setHeaderLabel("知识库（散装笔记）")
-        else:
-            self.tree.setHeaderLabel("笔记库（SQLite 容器）")
-        self._update_src_label()
+        self.tree.setHeaderLabel(
+            "知识库（散装笔记）" if mode == "fs" else "笔记库（SQLite 容器）")
         self.refresh_tree()
-
-    def _update_src_label(self):
-        """散装模式的路径顶栏已展示，页内不重复；仅 db 模式显示库文件路径。"""
-        if self.mode == "fs":
-            self.src_label.setVisible(False)
-            return
-        self.src_label.setVisible(True)
-        self.src_label.setText(
-            str(self.config["db_path"]) if self.db is not None else "未打开笔记库")
 
     # ── hooks ──
 
@@ -165,7 +88,6 @@ class LibraryPage(BaseTab):
         super().set_root_dir(root_dir)
         if self.mode == "fs":
             self.refresh_tree()
-        self._update_src_label()
 
     # ── 树构建 ──
 
@@ -288,16 +210,38 @@ class LibraryPage(BaseTab):
 
     def _on_context_menu(self, pos):
         item = self.tree.itemAt(pos)
-        if item is None:
-            return
-        self.tree.setCurrentItem(item)
         menu = QMenu(self)
-        if self.mode == "fs":
-            self._fs_menu(menu, item)
+        if item is None:
+            # 空白处：当前模式的全局操作
+            self._global_menu(menu)
         else:
-            self._db_menu(menu, item)
+            self.tree.setCurrentItem(item)
+            if self.mode == "fs":
+                self._fs_menu(menu, item)
+                menu.addSeparator()
+                self._global_menu(menu)
+            else:
+                self._db_menu(menu, item)
+                menu.addSeparator()
+                self._global_menu(menu)
         if menu.actions():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _global_menu(self, menu: QMenu):
+        """模式级操作（原工具行按钮全部收编于此）。"""
+        if self.mode == "fs":
+            act = menu.addAction("打包全库 ZIP", self.pack_all_zip)
+            act.setEnabled(bool(self.root_dir))
+        else:
+            if self.main_window is not None:
+                menu.addAction("选择笔记库文件…", self.main_window._on_src_db_clicked)
+            menu.addAction("新建笔记（根目录）", lambda: self.new_note())
+            menu.addAction("导入文件夹到笔记库…", self.import_folder)
+            menu.addAction("导出为文件夹…", self.export_folder)
+            menu.addSeparator()
+            menu.addAction("编辑器与落地目录设置…", self.edit_library_settings)
+        menu.addSeparator()
+        menu.addAction("刷新", self.refresh_tree)
 
     def _fs_menu(self, menu: QMenu, item: QTreeWidgetItem):
         rel = self._fs_item_rel(item)
@@ -486,14 +430,25 @@ class LibraryPage(BaseTab):
 
     # ── db 侧：库管理 ──
 
-    def choose_library(self):
+    def open_db_file(self, db_path: str):
+        """顶栏「db 容器」按钮选完文件后：落配置并打开库。
+
+        打开失败时置回 None 并记日志（不弹窗，避免对话框嵌套）。
+        """
+        try:
+            self._db_open_library(Path(db_path))
+        except Exception as e:
+            self.db = None
+            self.log(f"打开笔记库失败: {e}", "ERROR")
+            return
+        self.config["db_path"] = db_path
+        nb.save_config(self.config)
+
+    def edit_library_settings(self):
+        """编辑器命令与落地目录（低频设置，入口在 db 模式右键菜单）。"""
         dlg = QDialog(self)
-        dlg.setWindowTitle("选择/新建笔记库")
+        dlg.setWindowTitle("笔记库设置")
         form = QFormLayout(dlg)
-        db_row = PathRow(self.config["db_path"], mode="save",
-                         dialog_title="选择已有 .db 或输入新文件名",
-                         file_filter="SQLite 数据库 (*.db);;所有文件 (*.*)")
-        form.addRow("数据库文件 (.db):", db_row)
         editor_edit = QLineEdit(self.config["editor_command"])
         form.addRow("编辑器命令 (空=系统默认):", editor_edit)
         temp_row = PathRow(self.config.get("temp_root", ""), mode="dir",
@@ -506,11 +461,8 @@ class LibraryPage(BaseTab):
         form.addRow(btns)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._db_set_temp_root(temp_row.text())
-            self.config["db_path"] = db_row.text() or nb.DEFAULT_CONFIG["db_path"]
             self.config["editor_command"] = editor_edit.text().strip()
             nb.save_config(self.config)
-            self._db_open_library(Path(self.config["db_path"]))
-            self._update_src_label()
 
     def _db_open_library(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)

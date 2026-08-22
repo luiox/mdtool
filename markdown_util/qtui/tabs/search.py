@@ -1,9 +1,8 @@
-"""独立搜索页 — 散装目录与 db 容器的全文检索。
+"""独立搜索页 — 全文检索，数据源自动跟随笔记库页当前状态。
 
-从「笔记库」页拆出：目录树不再与搜索/结果表抢空间。布局为
-数据源切换 + 大输入框 + 全宽结果表 + 扫描进度条（worker 本就上报
-progress，此前无消费方）。散装结果双击用系统默认程序打开；db 结果
-双击跳回笔记库页打开编辑会话（编辑基础设施归笔记库页所有）。
+不再自带源切换：笔记库页在散装模式就扫根目录，在 db 模式就查容器
+（「打开过一次就有了」）。结果表列头按本次搜索的源动态适配；散装
+结果双击用系统默认程序打开，db 结果双击跳回笔记库页开编辑会话。
 """
 
 from datetime import datetime
@@ -13,11 +12,9 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPushButton,
     QProgressBar,
     QTableWidget,
     QTableWidgetItem,
@@ -35,8 +32,8 @@ _SCOPE_MAP = {"文件名": "name", "正文": "body", "文件名+正文": "both"}
 class SearchPage(BaseTab):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.mode = "fs"
         self._running = False
+        self._result_mode = "fs"  # 本次结果的来源（双击行为依赖它）
         self._build_ui()
 
     def _build_ui(self):
@@ -44,27 +41,12 @@ class SearchPage(BaseTab):
         root.setContentsMargins(18, 0, 18, 14)
         root.setSpacing(8)
 
-        # 数据源切换 + 提示
-        bar = QWidget()
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(6)
-        self.btn_fs = QPushButton("散装目录", checkable=True)
-        self.btn_fs.setProperty("toggle", "source")
-        self.btn_db = QPushButton("笔记库容器", checkable=True)
-        self.btn_db.setProperty("toggle", "source")
-        self._src_group = QButtonGroup(self)
-        self._src_group.addButton(self.btn_fs, 0)
-        self._src_group.addButton(self.btn_db, 1)
-        self._src_group.idClicked.connect(lambda i: self._set_mode("fs" if i == 0 else "db"))
-        h.addWidget(self.btn_fs)
-        h.addWidget(self.btn_db)
-        h.addStretch(1)
-        self.hint_label = muted_label("")
-        h.addWidget(self.hint_label)
-        root.addWidget(bar)
+        bar = QHBoxLayout()
+        self.src_hint = muted_label("搜索目标跟随笔记库页当前的数据源")
+        bar.addWidget(self.src_hint)
+        bar.addStretch(1)
+        root.addLayout(bar)
 
-        # 搜索行
         self.search_bar = SearchBar()
         self.search_bar.search_requested.connect(lambda *_: self.do_search())
         root.addWidget(self.search_bar)
@@ -73,57 +55,53 @@ class SearchPage(BaseTab):
         self.progress.setVisible(False)
         root.addWidget(self.progress)
 
-        # 结果表（全宽）
         self.results = QTableWidget(0, 4)
-        self.results.setHorizontalHeaderLabels(["路径", "标题", "命中", "片段"])
         self.results.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.results.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.results.verticalHeader().setVisible(False)
         self.results.horizontalHeader().setStretchLastSection(True)
         self.results.setColumnWidth(0, 300)
         self.results.setColumnWidth(1, 180)
-        self.results.setColumnWidth(2, 60)
+        self.results.setColumnWidth(2, 90)
         self.results.cellDoubleClicked.connect(self._on_result_double_click)
         root.addWidget(self.results, 1)
 
-        self._set_mode("fs")
+    # ── 当前数据源（跟随笔记库页）──
 
-    # ── 模式 ──
-
-    def _set_mode(self, mode: str):
-        self.mode = mode
-        self.btn_fs.setChecked(mode == "fs")
-        self.btn_db.setChecked(mode == "db")
+    def _current_source(self) -> tuple[str, Optional[str]]:
+        """返回 ``(mode, 错误提示)``；提示非空表示源不可搜。"""
+        mw = self.main_window
+        lib = mw.library_page if mw is not None else None
+        mode = lib.mode if lib is not None else "fs"
         if mode == "db":
-            self.results.setHorizontalHeaderLabels(["路径", "标题", "修改时间", "id"])
-            self.results.setColumnHidden(3, True)  # 隐藏 id 载体列
-        else:
-            self.results.setHorizontalHeaderLabels(["路径", "标题", "命中", "片段"])
-            self.results.setColumnHidden(3, False)
-        self.results.setRowCount(0)
-        self._update_hint()
+            if lib.db is None:
+                return mode, "笔记库未打开——请先在顶栏点「db 容器」选择 .db 文件"
+            return mode, None
+        if not self.root_dir:
+            return mode, "未选择知识库根目录——请先在顶栏点「散装目录」选择"
+        return mode, None
 
-    def _update_hint(self):
-        if self.mode == "fs":
-            self.hint_label.setText(
-                "" if self.root_dir else "未在顶栏选择知识库根目录")
+    def _refresh_hint(self):
+        mode, err = self._current_source()
+        if err:
+            self.src_hint.setText(err)
+            return
+        if mode == "db":
+            db_path = self.main_window.library_page.config.get("db_path", "")
+            self.src_hint.setText(f"搜索目标: 笔记库容器 · {db_path}")
         else:
-            db = self._library_db()
-            self.hint_label.setText("" if db is not None else "笔记库未打开")
+            self.src_hint.setText(f"搜索目标: 散装目录 · {self.root_dir}")
+
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        """进入页面时刷新源提示（模式可能在别处被切换）。"""
+        super().showEvent(event)
+        self._refresh_hint()
 
     # ── hooks ──
 
     def set_root_dir(self, root_dir: Optional[Path]):
         super().set_root_dir(root_dir)
-        self._update_hint()
-
-    # ── db 源：借用笔记库页已打开的连接 ──
-
-    def _library_db(self):
-        mw = self.main_window
-        if mw is not None and hasattr(mw, "library_page"):
-            return mw.library_page.db
-        return None
+        self._refresh_hint()
 
     # ── 搜索 ──
 
@@ -133,19 +111,30 @@ class SearchPage(BaseTab):
             self.log("搜索内容为空")
             return
         scope = _SCOPE_MAP.get(self.search_bar.scope_text(), "name")
-        if self.mode == "db":
+        mode, err = self._current_source()
+        if err:
+            QMessageBox.warning(self, "提示", err)
+            return
+        self._result_mode = mode
+        self._apply_headers(mode)
+        self.results.setRowCount(0)
+        if mode == "db":
             self._search_db(pattern, scope)
         else:
             self._search_fs(pattern, scope)
 
+    def _apply_headers(self, mode: str):
+        if mode == "db":
+            self.results.setHorizontalHeaderLabels(["路径", "标题", "修改时间", "id"])
+            self.results.setColumnHidden(3, True)   # 隐藏 id 载体列
+        else:
+            self.results.setHorizontalHeaderLabels(["路径", "标题", "命中", "片段"])
+            self.results.setColumnHidden(3, False)
+
     def _search_fs(self, pattern: str, scope: str):
-        if not self.root_dir:
-            QMessageBox.warning(self, "警告", "请先在顶栏选择知识库根目录")
-            return
         if self._running:  # 防重入
             return
         self._running = True
-        self.results.setRowCount(0)
         self.progress.setVisible(True)
         self.progress.setValue(0)
         self.log(f"开始搜索「{pattern}」(范围={self.search_bar.scope_text()})")
@@ -177,11 +166,7 @@ class SearchPage(BaseTab):
         self.log(f"搜索失败: {msg}", "ERROR")
 
     def _search_db(self, pattern: str, scope: str):
-        db = self._library_db()
-        if db is None:
-            QMessageBox.warning(self, "提示", "请先在笔记库页打开一个笔记库")
-            return
-        self.results.setRowCount(0)
+        db = self.main_window.library_page.db
         try:
             rows = db.search(pattern, scope)
         except Exception as e:
@@ -200,7 +185,7 @@ class SearchPage(BaseTab):
         item = self.results.item(row, 0)
         if item is None:
             return
-        if self.mode == "fs":
+        if self._result_mode == "fs":
             if self.root_dir:
                 rel = item.data(Qt.ItemDataRole.UserRole) or item.text()
                 fb.open_external(self.root_dir / rel)
