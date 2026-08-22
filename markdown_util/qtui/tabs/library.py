@@ -234,7 +234,7 @@ class LibraryPage(BaseTab):
             act.setEnabled(bool(self.root_dir))
         else:
             if self.main_window is not None:
-                menu.addAction("选择笔记库文件…", self.main_window._on_src_db_clicked)
+                menu.addAction("选择笔记库文件…", self.main_window.pick_db_file)
             menu.addAction("新建笔记（根目录）", lambda: self.new_note())
             menu.addAction("导入文件夹到笔记库…", self.import_folder)
             menu.addAction("导出为文件夹…", self.export_folder)

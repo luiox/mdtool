@@ -147,7 +147,7 @@ class MainWindow(QMainWindow):
         self.src_fs = QPushButton("散装目录")
         self.src_fs.clicked.connect(self._on_src_fs_clicked)
         self.src_db = QPushButton("db 容器")
-        self.src_db.clicked.connect(self._on_src_db_clicked)
+        self.src_db.clicked.connect(self.pick_db_file)
         h.addWidget(self.src_fs)
         h.addWidget(self.src_db)
 
@@ -188,6 +188,10 @@ class MainWindow(QMainWindow):
         index = len(self._nav_keys) - 1 if key == "log" else self._nav_keys.index(key)
         self.stack.setCurrentIndex(index)
         self.page_title.setText(PAGE_TITLES.get(key, "日志"))
+        # 数据源按钮只在笔记库相关页面有意义
+        visible = key in ("library", "search")
+        for b in (self.src_fs, self.src_db):
+            b.setVisible(visible)
         for k, e in self._pages.items():  # 手动互斥（不用 QButtonGroup 的自动 id）
             e["button"].setChecked(k == key)
 
@@ -205,14 +209,23 @@ class MainWindow(QMainWindow):
         self.library_page._set_mode("fs")
         self.update_title()
 
-    def _on_src_db_clicked(self):
-        """「db 容器」按钮：选 .db 文件（可选已有或输入新文件名），取消则不切换。"""
+    def pick_db_file(self):
+        """「db 容器」按钮 / 笔记库右键菜单：选 .db 文件并打开切换。
+
+        选到不存在的路径时先确认再新建，防止手滑打错名静默生成空库。
+        """
         start_dir = str(self.library_page.config.get("db_path") or "")
         path, _ = QFileDialog.getSaveFileName(
             self, "选择已有 .db 或输入新文件名（新建）", start_dir,
             "SQLite 数据库 (*.db);;所有文件 (*.*)")
         if not path:
             return
+        if not Path(path).exists():
+            if QMessageBox.question(
+                self, "新建笔记库",
+                f"文件不存在：\n{path}\n\n是否新建该笔记库？"
+            ) != QMessageBox.StandardButton.Yes:
+                return
         self.library_page.open_db_file(path)
         if self.library_page.db is None:  # 打开失败（open_db_file 内已记日志）
             return
