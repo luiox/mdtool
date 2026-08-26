@@ -205,7 +205,7 @@ def note_rel(path: Path, kb_root: Path) -> str:
 def preview_export(
     notes: list[tuple[str, str]],
     *,
-    source_root: Path,
+    source_root: Optional[Path] = None,
     kb_config: Optional[dict] = None,
     media_root: Optional[Path] = None,
     include_images: bool = True,
@@ -213,17 +213,21 @@ def preview_export(
     max_asset_bytes: int = MAX_ASSET_BYTES_DEFAULT,
 ) -> dict:
     """与 :func:`plan_export` 同一套判定，但只 stat 不读字节——供导出选项
-    对话框随开关切换实时刷新统计（长库也不卡）。"""
-    source_root = Path(source_root)
-    cfg = kb_config or load_kb_config(source_root)
-    media_root = Path(media_root) if media_root else source_root
+    对话框随开关切换实时刷新统计（长库也不卡）。参数语义与 plan_export
+    一致：散装给 source_root，db 给 media_root，两者必有其一。"""
+    base = Path(media_root) if media_root else (
+        Path(source_root) if source_root else None)
+    if base is None:
+        raise ValueError("preview_export 需要 source_root 或 media_root 之一")
+    cfg = kb_config or (load_kb_config(Path(source_root)) if source_root
+                        else dict(DEFAULT_KB_CONFIG))
 
     wanted: set[tuple[str, str]] = set()
     skipped: list[str] = []
     for _rel, content in notes:
         for dest, cat, name in _collect_media_refs(content, cfg):
             wanted.add((cat, name))
-            ref_file = media_root / cfg["images_subdir" if cat == "images" else "assets_subdir"] / name
+            ref_file = base / cfg["images_subdir" if cat == "images" else "assets_subdir"] / name
             if not ref_file.is_file():
                 skipped.append(dest)
 
@@ -234,7 +238,7 @@ def preview_export(
            "excluded": []}
     for cat, name in sorted(wanted):
         sub = cfg[f"{cat}_subdir"]
-        fp = media_root / sub / name
+        fp = base / sub / name
         if not fp.is_file():
             continue
         size = fp.stat().st_size

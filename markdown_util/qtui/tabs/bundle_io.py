@@ -198,7 +198,8 @@ class BundleCenterDialog(QDialog):
                 except (OSError, UnicodeDecodeError) as e:
                     self._log(f"读取失败（跳过）: {fp} — {e}", "WARNING")
         elif self.target_db is not None:
-            for row in self.target_db.list_all():
+            # 必须带 body：导出页要内容做统计/勾选，缺省的轻量行没有这一列
+            for row in self.target_db.list_all(include_body=True):
                 self._contents[row["path"]] = row["body"]
                 self._all_rels.append(row["path"])
         self._all_rels.sort()

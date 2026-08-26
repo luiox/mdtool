@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self.resize(1180, 760)
         self.setMinimumSize(980, 640)
         self._closing = False
+        self._quitting = False
         self._tray = None
 
         # key -> {"tab": BaseTab | None(log页), "button": QPushButton}
@@ -282,7 +283,9 @@ class MainWindow(QMainWindow):
         self.switch_page("migrate")
         self._pages["migrate"]["tab"].load_file(path)
 
-    # ── 托盘 ──
+    # ── 托盘与退出 ──
+    # 设计原则：退出只有一条路径（really_quit，幂等，先停页面再清线程池）；
+    # 托盘只是窗口的隐藏形态；没有托盘的环境绝不提供"最小化到托盘"。
 
     def _setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -294,13 +297,15 @@ class MainWindow(QMainWindow):
         act_show = menu.addAction("显示窗口")
         act_show.triggered.connect(self._tray_show)
         act_quit = menu.addAction("退出程序")
-        act_quit.triggered.connect(self._tray_quit)
+        act_quit.triggered.connect(self.really_quit)
         self._tray.setContextMenu(menu)
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
     def _on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+        # 单击/双击都唤起主窗口——用户不必记住该用哪一种
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
             self._tray_show()
 
     def _tray_show(self):
@@ -308,41 +313,64 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def _tray_quit(self):
-        self._closing = True
-        self._do_shutdown()
-        QApplication.quit()
-
-    # ── 关闭处理 ──
-
     def closeEvent(self, event):  # noqa: N802 - Qt override
-        if self._closing:
+        if self._quitting:
             event.accept()
             return
-        dlg = QMessageBox(self)
-        dlg.setWindowTitle("退出确认")
-        dlg.setText("关闭程序时执行什么操作？")
-        b_exit = dlg.addButton("退出程序", QMessageBox.ButtonRole.AcceptRole)
-        b_min = dlg.addButton("最小化到托盘", QMessageBox.ButtonRole.RejectRole)
-        dlg.addButton("取消", QMessageBox.ButtonRole.DestructiveRole)
-        dlg.exec()
-        clicked = dlg.clickedButton()
-        if clicked is b_exit:
-            self._closing = True
-            self._do_shutdown()
+        choice = self._ask_on_close()
+        if choice == "exit":
+            self.really_quit()
             event.accept()
-        elif clicked is b_min:
+        elif choice == "tray":
             self.hide()
             event.ignore()
         else:
             event.ignore()
 
+    def _ask_on_close(self) -> Optional[str]:
+        """关闭确认 → 'exit' | 'tray' | None(取消)。托盘不可用时不提供隐藏项。"""
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("退出确认")
+        dlg.setText("关闭程序时执行什么操作？")
+        b_exit = dlg.addButton("退出程序", QMessageBox.ButtonRole.AcceptRole)
+        b_tray = None
+        if self._tray is not None:
+            b_tray = dlg.addButton("最小化到托盘", QMessageBox.ButtonRole.YesRole)
+        dlg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        dlg.exec()
+        clicked = dlg.clickedButton()
+        if clicked is b_exit:
+            return "exit"
+        if b_tray is not None and clicked is b_tray:
+            return "tray"
+        return None
+
+    def really_quit(self):
+        """唯一退出路径（托盘菜单 / 关闭按钮共用）。幂等：重复调用只补发 quit。"""
+        if getattr(self, "_quitting", False):
+            QApplication.quit()
+            return
+        self._quitting = True
+        self._closing = True
+        self._do_shutdown()
+        # 后台 worker（搜索/打包/导入导出 job 走全局线程池）：丢弃排队任务，
+        # 等待在跑的收尾——否则事件循环结束后非守护线程会把进程吊住
+        from PySide6.QtCore import QThreadPool
+        pool = QThreadPool.globalInstance()
+        pool.clear()
+        pool.waitForDone(5000)
+        if self._tray is not None:
+            self._tray.hide()
+        QApplication.setQuitOnLastWindowClosed(True)
+        QApplication.quit()
+
     def _do_shutdown(self):
         for tab in self.all_tabs():
             try:
                 tab.shutdown()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 - 关闭边界，失败必须可见
+                get_log_bus().publish(
+                    f"关闭 {type(tab).__name__} 失败: {e}", "ERROR")
 
 
 class LogPage(QWidget):

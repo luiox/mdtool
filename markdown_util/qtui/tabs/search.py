@@ -98,7 +98,10 @@ class SearchPage(BaseTab):
             self.src_hint.setText(f"搜索目标: 笔记库容器 · {db_path}")
         else:
             notes_root = self._fs_notes_root()
-            self.src_hint.setText(f"搜索目标: 散装笔记 · {notes_root}")
+            if notes_root is None:
+                self.src_hint.setText("搜索目标: 未选择知识库根目录")
+            else:
+                self.src_hint.setText(f"搜索目标: 散装笔记 · {notes_root}")
 
     def showEvent(self, event):  # noqa: N802 - Qt override
         """进入页面时刷新源提示（模式可能在别处被切换）。"""
