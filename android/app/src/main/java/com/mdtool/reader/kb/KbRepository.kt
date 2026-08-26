@@ -25,8 +25,8 @@ fun extractTitleFromMarkdown(md: String): String? {
 /**
  * 知识库目录访问（DocumentsContract 直查 + TreeIndex 内存缓存）。
  *
- * KB 根：<root>/notes/（笔记，任意子目录）+ <root>/images/ + <root>/assets/（媒体）+ meta.db。
- * 若所选目录没有 notes/（用户直接选了笔记目录），则把所选目录本身当笔记根。
+ * KB 根：<root>/markdown/（笔记，任意子目录）+ <root>/images/ + <root>/assets/（媒体）+ meta.db。
+ * 若所选目录没有 markdown/（旧布局 notes/ 或用户直接选了笔记目录），按兜底规则取笔记根。
  *
  * 缓存与失效：目录列表/搜索结果基于内存缓存，同步工具落地新文件后
  * 调 [refresh]（UI 的刷新按钮）；单篇阅读（[readNote]）总是直读文件，不受缓存影响。
@@ -58,9 +58,11 @@ class KbRepository(context: Context, treeUri: Uri) {
         private const val CONTENT_CACHE_TTL_MS = 60_000L
     }
 
-    /** notes/ 子目录为笔记根；没有则把所选目录本身当笔记根。 */
+    /** 笔记根：markdown/ 优先，退旧布局 notes/；都没有则把所选目录本身当笔记根。 */
     private val notesRootId: String by lazy {
-        index.findChild(index.rootId(), "notes")?.docId ?: index.rootId()
+        index.findChild(index.rootId(), "markdown")?.docId
+            ?: index.findChild(index.rootId(), "notes")?.docId
+            ?: index.rootId()
     }
 
     // ── 目录浏览 ──

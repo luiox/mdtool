@@ -260,6 +260,23 @@ class MediaServerTab(BaseTab):
             import webbrowser
             webbrowser.open(f"http://{self.config['host']}:{self.config['port']}/")
 
+    def set_meta_override(self, meta_path=None) -> bool:
+        """db 模式激活期间把元数据源切到指定 sqlite（如 notes.db，规范 §4.1）；
+        ``None`` 还原为媒体根下的 meta.db。处理器每次请求都读
+        ``self.server.meta_db``，切换即时生效；服务器未运行时静默跳过。
+        """
+        if not getattr(self.server, "running", False):
+            return False
+        from server.meta_db import MetaDB
+        base = Path(meta_path) if meta_path else Path(self.config["media_root"]) / "meta.db"
+        try:
+            self.server.meta_db = MetaDB(base)
+        except Exception as e:
+            self.log(f"切换元数据源失败: {e}", "ERROR")
+            return False
+        self.log(f"元数据源: {base}")
+        return True
+
     # ── upload ──
 
     def _browse_file(self):
