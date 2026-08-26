@@ -477,27 +477,59 @@ class LibraryPage(BaseTab):
         return sorted(set(md_files))
 
     # ── 右键菜单 ──
+    # 结构约定：条目菜单 = 作用于该条目的动作 + 一组新建；空白处 = 根锚点
+    # 的模式级动作；库级动作统一收进尾部「库」子菜单。同名动作在任何
+    # 菜单里只出现一次。
 
     def _on_context_menu(self, pos):
         item = self.tree.itemAt(pos)
         menu = QMenu(self)
         if item is None:
-            # 空白处 = 库根。锚点显式为 ""——绝不吸附当前选中项，
-            # 否则连建两个平级文件夹都会嵌进第一个里
-            self._global_menu(menu, anchor="")
+            # 空白处 = 库根。锚点显式为 ""——绝不吸附当前选中项
+            self._blank_menu(menu)
         else:
             self.tree.setCurrentItem(item)
             if self.mode == "fs":
-                anchor = self._fs_anchor_for_item(item)
-                self._fs_menu(menu, item, anchor)
-                menu.addSeparator()
-                self._global_menu(menu, anchor=anchor)
+                self._fs_menu(menu, item, anchor=self._fs_anchor_for_item(item))
             else:
                 self._db_menu(menu, item)
-                menu.addSeparator()
-                self._global_menu(menu)
+        self._common_tail(menu)
         if menu.actions():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _new_entries(self, menu: QMenu, anchor: str = ""):
+        """新建组：锚点目录落点（文件夹=其内 / 笔记=同级 / 空白=根）。"""
+        act = menu.addAction("新建文件夹…", lambda: self._fs_new_folder(anchor))
+        act.setEnabled(bool(self.root_dir))
+        act = menu.addAction("新建 Markdown 文件…",
+                             lambda: self._fs_new_note_at(anchor))
+        act.setEnabled(bool(self.root_dir))
+
+    def _blank_menu(self, menu: QMenu):
+        if self.mode == "fs":
+            self._new_entries(menu, anchor="")
+            menu.addSeparator()
+            act = menu.addAction("打包全库 ZIP", self.pack_all_zip)
+            act.setEnabled(bool(self.root_dir))
+        else:
+            menu.addAction("新建笔记（根目录）", self.new_note)
+            menu.addSeparator()
+            menu.addAction("导入文件夹到笔记库…", self.import_folder)
+            menu.addAction("导出为文件夹…", self.export_folder)
+            menu.addSeparator()
+            menu.addAction("编辑器与落地目录设置…", self.edit_library_settings)
+
+    def _common_tail(self, menu: QMenu):
+        """共用收尾：「库」子菜单 + 刷新。"""
+        menu.addSeparator()
+        lib = menu.addMenu("库")
+        if self.main_window is not None:
+            lib.addAction("打开笔记库 (.db)…", self.main_window.pick_db_file)
+            lib.addAction("新建笔记库…", self.main_window.create_db_file)
+        lib.addSeparator()
+        lib.addAction("导入导出中心…", lambda: self.open_bundle_center())
+        menu.addSeparator()
+        menu.addAction("刷新", self.refresh_tree)
 
     def _fs_anchor_for_item(self, item: QTreeWidgetItem) -> str:
         """新建类操作的锚点目录：笔记 → 所在目录；文件夹 → 自身。"""
@@ -508,73 +540,52 @@ class LibraryPage(BaseTab):
             return rel.rpartition("/")[0]
         return rel
 
-    def _global_menu(self, menu: QMenu, anchor: str = ""):
-        """模式级操作（原工具行按钮全部收编于此）。anchor = 新建落点目录。"""
-        if self.mode == "fs":
-            act = menu.addAction("新建文件夹…", lambda: self._fs_new_folder(anchor))
-            act.setEnabled(bool(self.root_dir))
-            act = menu.addAction("新建 Markdown 文件…",
-                                 lambda: self._fs_new_note_at(anchor))
-            act.setEnabled(bool(self.root_dir))
-            menu.addSeparator()
-            act = menu.addAction("打包全库 ZIP", self.pack_all_zip)
-            act.setEnabled(bool(self.root_dir))
-        else:
-            menu.addAction("新建笔记（根目录）", self.new_note)
-            menu.addAction("导入文件夹到笔记库…", self.import_folder)
-            menu.addAction("导出为文件夹…", self.export_folder)
-            menu.addSeparator()
-            menu.addAction("编辑器与落地目录设置…", self.edit_library_settings)
-        # 库级入口两种模式都给：新建/切换 .db 不能依赖已处于 db 模式，
-        # 否则没打开过任何库时永远进不去 db 模式（死锁）
-        if self.main_window is not None:
-            menu.addSeparator()
-            menu.addAction("打开笔记库 (.db)…", self.main_window.pick_db_file)
-            menu.addAction("新建笔记库…", self.main_window.create_db_file)
-        menu.addSeparator()
-        menu.addAction("导入导出中心…", lambda: self.open_bundle_center())
-        menu.addSeparator()
-        menu.addAction("刷新", self.refresh_tree)
-
     def _fs_menu(self, menu: QMenu, item: QTreeWidgetItem, anchor: str = ""):
         rel = self._fs_item_rel(item)
-        if rel is None:
+        notes_root = self._fs_notes_root()
+        if rel is None or notes_root is None:
             return
-        p = self.root_dir / rel
-        if p.suffix.lower() == ".md":
+        p = notes_root / rel
+        is_md_file = p.is_file() and p.suffix.lower() == ".md"
+        # 新建（锚定本条目）
+        self._new_entries(menu, anchor)
+        # 打开 / 移动 / 删除 —— 文件与文件夹同等支持
+        menu.addSeparator()
+        if is_md_file:
             menu.addAction("打开（系统默认程序）", lambda: fb.open_external(p))
-            menu.addAction("重命名/移动…", self._fs_rename_selected)
-            menu.addAction("删除", self._fs_delete_selected)
-            menu.addSeparator()
+        menu.addAction("重命名/移动…", self._fs_rename_selected)
+        menu.addAction("删除", self._fs_delete_selected)
+        # 打包 / 迁移 / 导出导入
         md_files = self._fs_selected_md_files()
         if md_files:
+            menu.addSeparator()
             label = f"打包为 ZIP（{len(md_files)} 篇）" if len(md_files) > 1 else "打包为 ZIP"
             menu.addAction(label, self.pack_to_zip)
-            if len(md_files) == 1 and md_files[0].suffix.lower() == ".md":
+            if len(md_files) == 1 and is_md_file:
                 menu.addAction("迁移图片到图床", self.migrate_images)
-        n = len(md_files)
-        label = f"导出 / 导入（已选 {n} 篇）…" if n > 1 else "导出 / 导入…"
-        menu.addAction(label, lambda: self.open_bundle_center(
-            pre_rels=[kbb.note_rel(p, self.root_dir) for p in md_files]))
-        menu.addSeparator()
-        menu.addAction("新建文件夹…", lambda: self._fs_new_folder(anchor))
-        menu.addAction("新建 Markdown 文件…", lambda: self._fs_new_note_at(anchor))
+            n = len(md_files)
+            label = f"导出 / 导入（已选 {n} 篇）…" if n > 1 else "导出 / 导入…"
+            menu.addAction(label, lambda: self.open_bundle_center(
+                pre_rels=[kbb.note_rel(pp, self.root_dir) for pp in md_files]))
 
     def _db_menu(self, menu: QMenu, item: QTreeWidgetItem):
         if item.data(0, Qt.ItemDataRole.UserRole) is not None:
             menu.addAction("打开（编辑）", self.open_selected)
-            menu.addAction("重命名/移动…", self._db_rename_selected)
-            menu.addSeparator()
-            menu.addAction("删除", self._db_delete_selected)
-            # 笔记项上也给"在此文件夹新建"（建在其所在目录，即兄弟位置）
             menu.addSeparator()
             menu.addAction("在此文件夹新建笔记…",
                            lambda: self._db_new_note_at(self._current_folder_path()))
+            menu.addSeparator()
+            menu.addAction("重命名/移动…", self._db_rename_selected)
+            menu.addAction("删除", self._db_delete_selected)
         else:
-            menu.addAction("新建笔记…", lambda: self._db_new_note_at(
-                self._folder_iid_of(item)))
+            folder = self._folder_iid_of(item)
+            menu.addAction("新建笔记…", lambda: self._db_new_note_at(folder))
+            menu.addSeparator()
+            menu.addAction("重命名/移动…", self._db_rename_selected)
+            menu.addAction("删除", self._db_delete_selected)
         paths = self._db_selected_note_paths()
         if paths:
+            menu.addSeparator()
             label = (f"导出 / 导入（已选 {len(paths)} 篇）…" if len(paths) > 1
                      else "导出 / 导入…")
             menu.addAction(label, lambda: self.open_bundle_center(pre_rels=paths))
@@ -657,17 +668,33 @@ class LibraryPage(BaseTab):
         (self._fs_delete_selected if self.mode == "fs"
          else self._db_delete_selected)()
 
+    def _fs_single_target(self) -> Optional[tuple[str, bool]]:
+        """当前条目的 (rel, 是否文件夹)；无选中返回 None。"""
+        rel = self._fs_item_rel(self.tree.currentItem())
+        if rel is None:
+            return None
+        is_dir = self.tree.currentItem().data(0, Qt.ItemDataRole.UserRole) is None
+        return rel, is_dir
+
     def _fs_rename_selected(self):
+        """重命名/移动当前条目——文件与文件夹同等支持。
+
+        文件夹整枝 shutil.move；拒绝移入自身子目录。
+        """
         notes_root = self._fs_notes_root()
         if notes_root is None:
             return
-        rel = self._fs_item_rel(self.tree.currentItem())
-        if rel is None or not rel.lower().endswith(".md"):
-            QMessageBox.warning(self, "提示", "仅支持重命名 .md 文件")
+        target = self._fs_single_target()
+        if target is None:
+            QMessageBox.warning(self, "提示", "请先选中要重命名的条目")
             return
+        rel, is_dir = target
         new_rel, ok = QInputDialog.getText(
             self, "重命名/移动", "新的相对路径（用 / 分隔文件夹）：", text=rel)
         if not ok or not new_rel or new_rel == rel:
+            return
+        if is_dir and (new_rel == rel or new_rel.startswith(rel + "/")):
+            QMessageBox.warning(self, "提示", "不能把文件夹移动到其自身内部")
             return
         src, dst = notes_root / rel, notes_root / new_rel
         if dst.exists():
@@ -675,27 +702,35 @@ class LibraryPage(BaseTab):
             return
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            src.rename(dst)
+            shutil.move(str(src), str(dst))
         except OSError as e:
             QMessageBox.critical(self, "重命名失败", str(e))
             return
         self.log(f"已重命名: {rel} → {new_rel}")
         self.refresh_tree()
+        self._reveal_rel(new_rel)
 
     def _fs_delete_selected(self):
+        """删除当前条目——文件 unlink，文件夹递归删除（确认文案明示）。"""
         notes_root = self._fs_notes_root()
         if notes_root is None:
             return
-        rel = self._fs_item_rel(self.tree.currentItem())
-        if rel is None or not rel.lower().endswith(".md"):
-            QMessageBox.warning(self, "提示", "仅支持删除 .md 文件")
+        target = self._fs_single_target()
+        if target is None:
+            QMessageBox.warning(self, "提示", "请先选中要删除的条目")
             return
-        if QMessageBox.question(self, "确认删除",
-                                f"删除文件「{rel}」？此操作不可撤销。"
-                                ) != QMessageBox.StandardButton.Yes:
+        rel, is_dir = target
+        what = "文件夹「{0}」及其全部内容" if is_dir else "文件「{0}」"
+        if QMessageBox.question(
+                self, "确认删除",
+                f"删除{what.format(rel)}？此操作不可撤销。"
+                ) != QMessageBox.StandardButton.Yes:
             return
         try:
-            (notes_root / rel).unlink()
+            if is_dir:
+                shutil.rmtree(notes_root / rel)
+            else:
+                (notes_root / rel).unlink()
         except OSError as e:
             QMessageBox.critical(self, "删除失败", str(e))
             return
@@ -1107,10 +1142,50 @@ class LibraryPage(BaseTab):
         self.log(f"新建笔记: {path}")
         self._db_open_note_for_edit(int(nid))
 
+    def _db_move_prefix(self, prefix: str, new_prefix: str) -> tuple[bool, str]:
+        """把前缀 prefix 下所有笔记路径整枝改写到 new_prefix。
+
+        返回 (是否成功, 失败原因)。冲突检查通过后才执行，不做半截移动。
+        """
+        rows = [r["path"] for r in self.db.list_all()
+                if r["path"].startswith(prefix + "/")]
+        if not rows:
+            return False, "文件夹不存在或为空"
+        if new_prefix == prefix or new_prefix.startswith(prefix + "/"):
+            return False, "不能把文件夹移动到其自身内部"
+        plan = []
+        for old in rows:
+            np = NotesDB.normalize_path(new_prefix + old[len(prefix):])
+            if self.db.get_note_by_path(np) is not None:
+                return False, f"目标路径已存在: {np}"
+            plan.append((old, np))
+        for old, np in plan:
+            row = self.db.get_note_by_path(old)
+            if row is not None:
+                self.db.rename(int(row["id"]), np)
+        return True, ""
+
     def _db_rename_selected(self):
-        note_id = self._selected_note_id()
-        if note_id is None or self.db is None:
+        item = self.tree.currentItem()
+        if item is None or self.db is None:
             return
+        if item.data(0, Qt.ItemDataRole.UserRole) is None:
+            # 文件夹：整枝前缀改写
+            prefix = self._folder_iid_of(item)
+            new_prefix, ok = QInputDialog.getText(
+                self, "重命名/移动文件夹", "新的文件夹路径（用 / 分隔）：",
+                text=prefix)
+            if not ok or not new_prefix:
+                return
+            new_prefix = self.db.normalize_path(new_prefix)
+            done, err = self._db_move_prefix(prefix, new_prefix)
+            if not done:
+                QMessageBox.warning(self, "无法移动", err)
+                return
+            self.refresh_tree()
+            self.log(f"已移动文件夹: {prefix}/ → {new_prefix}/")
+            return
+        note_id = self._selected_note_id()
         row = self.db.get_note(note_id)
         if row is None:
             return
@@ -1140,9 +1215,35 @@ class LibraryPage(BaseTab):
         self.log(f"已重命名: {row['path']} → {new_path}")
 
     def _db_delete_selected(self):
-        note_id = self._selected_note_id()
-        if note_id is None or self.db is None:
+        item = self.tree.currentItem()
+        if item is None or self.db is None:
             return
+        if item.data(0, Qt.ItemDataRole.UserRole) is None:
+            # 文件夹：递归删除其下全部笔记（确认文案明示数量）
+            prefix = self._folder_iid_of(item)
+            victims = [r for r in self.db.list_all()
+                       if r["path"].startswith(prefix + "/")]
+            if not victims:
+                QMessageBox.information(self, "提示", f"「{prefix}/」下没有笔记")
+                return
+            if QMessageBox.question(
+                    self, "确认删除",
+                    f"删除文件夹「{prefix}/」及其下 {len(victims)} 篇笔记？"
+                    "此操作不可撤销。") != QMessageBox.StandardButton.Yes:
+                return
+            for r in victims:
+                nid = int(r["id"])
+                self.db.delete(nid)
+                info = self._open_notes.pop(nid, None)
+                if info:
+                    try:
+                        info["temp_path"].unlink()
+                    except OSError:
+                        pass
+            self.refresh_tree()
+            self.log(f"已删除文件夹: {prefix}/（{len(victims)} 篇）")
+            return
+        note_id = self._selected_note_id()
         row = self.db.get_note(note_id)
         if row is None:
             return
