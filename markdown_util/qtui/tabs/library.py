@@ -142,6 +142,14 @@ class LibraryPage(BaseTab):
             folders[folder_path] = item
             return item
 
+        for dirpath, dirnames, _files in os.walk(notes_root):
+            # 空文件夹也要出现在树上（否则"新建文件夹"后像没生效）
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            dirnames.sort(key=str.lower)
+            rel_dir = Path(dirpath).relative_to(notes_root).as_posix()
+            if rel_dir != ".":
+                ensure_folder(rel_dir)
+
         for rel, _abs in fb.list_md_tree(notes_root):
             folder, _, name = rel.rpartition("/")
             parent = ensure_folder(folder) if folder else self.tree.invisibleRootItem()
@@ -258,6 +266,11 @@ class LibraryPage(BaseTab):
     def _global_menu(self, menu: QMenu):
         """模式级操作（原工具行按钮全部收编于此）。"""
         if self.mode == "fs":
+            act = menu.addAction("新建文件夹…", self._fs_new_folder)
+            act.setEnabled(bool(self.root_dir))
+            act = menu.addAction("新建 Markdown 文件…", self._fs_new_note_here)
+            act.setEnabled(bool(self.root_dir))
+            menu.addSeparator()
             act = menu.addAction("打包全库 ZIP", self.pack_all_zip)
             act.setEnabled(bool(self.root_dir))
         else:
@@ -297,7 +310,9 @@ class LibraryPage(BaseTab):
         label = f"导出 / 导入（已选 {n} 篇）…" if n > 1 else "导出 / 导入…"
         menu.addAction(label, lambda: self.open_bundle_center(
             pre_rels=[kbb.note_rel(p, self.root_dir) for p in md_files]))
-        menu.addAction("在此新建笔记", self._fs_new_note_here)
+        menu.addSeparator()
+        menu.addAction("新建文件夹…", self._fs_new_folder)
+        menu.addAction("新建 Markdown 文件…", self._fs_new_note_here)
 
     def _db_menu(self, menu: QMenu, item: QTreeWidgetItem):
         if item.data(0, Qt.ItemDataRole.UserRole) is not None:
@@ -305,8 +320,13 @@ class LibraryPage(BaseTab):
             menu.addAction("重命名/移动…", self._db_rename_selected)
             menu.addSeparator()
             menu.addAction("删除", self._db_delete_selected)
+            # 笔记项上也给"在此文件夹新建"（建在其所在目录，即兄弟位置）
+            menu.addSeparator()
+            menu.addAction("在此文件夹新建笔记…",
+                           lambda: self._db_new_note_at(self._current_folder_path()))
         else:
-            menu.addAction("在此新建笔记", self.new_note)
+            menu.addAction("新建笔记…", lambda: self._db_new_note_at(
+                self._folder_iid_of(item)))
         paths = self._db_selected_note_paths()
         if paths:
             label = (f"导出 / 导入（已选 {len(paths)} 篇）…" if len(paths) > 1
@@ -324,13 +344,40 @@ class LibraryPage(BaseTab):
 
     # ── 散装侧操作 ──
 
+    def _fs_new_folder(self):
+        """在当前选中位置（或根）新建真实文件夹——散装库目录真实存在于磁盘。"""
+        notes_root = self._fs_notes_root()
+        if notes_root is None:
+            QMessageBox.warning(self, "警告", "请先在顶栏选择知识库根目录")
+            return
+        folder = self._current_folder_path()
+        name, ok = QInputDialog.getText(self, "新建文件夹", "文件夹名称：")
+        if not ok or not name:
+            return
+        name = name.strip().strip("/\\")
+        if not name or "/" in name or "\\" in name or any(c in name for c in '<>:"|?*'):
+            QMessageBox.warning(self, "提示", f"名称不合法: {name}")
+            return
+        target = notes_root / folder / name if folder else notes_root / name
+        if target.exists():
+            QMessageBox.warning(self, "提示", f"已存在同名文件夹: {name}")
+            return
+        try:
+            target.mkdir(parents=True)
+        except OSError as e:
+            QMessageBox.critical(self, "新建文件夹失败", str(e))
+            return
+        self.log(f"新建文件夹: {target.relative_to(notes_root).as_posix()}")
+        self.refresh_tree()
+
     def _fs_new_note_here(self):
         if not self.root_dir:
             QMessageBox.warning(self, "警告", "请先在顶栏选择知识库根目录")
             return
         folder = self._current_folder_path().replace("/", os.sep)
-        name, ok = QInputDialog.getText(self, "新建笔记", "笔记文件名（含 .md）：",
-                                        text="未命名.md")
+        name, ok = QInputDialog.getText(
+            self, "新建笔记", "笔记文件名（可含子路径，如 sub/名字.md）：",
+            text="未命名.md")
         if not ok or not name:
             return
         notes_root = self._fs_notes_root()
@@ -778,8 +825,9 @@ class LibraryPage(BaseTab):
         db = self._require_db()
         if db is None:
             return
-        name, ok = QInputDialog.getText(self, "新建笔记", "笔记文件名（含 .md）：",
-                                        text="未命名.md")
+        name, ok = QInputDialog.getText(
+            self, "新建笔记", "笔记文件名（可含子路径，如 sub/名字.md）：",
+            text="未命名.md")
         if not ok or not name:
             return
         name = name.replace("\\", "/").strip("/")
