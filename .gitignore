@@ -20,3 +20,6 @@ local.properties
 .kotlin/
 .idea/
 *.apk
+
+# uv 在仓库根目录误生成的锁文件（真正的在 markdown_util/ 内并已跟踪）
+uv.lock

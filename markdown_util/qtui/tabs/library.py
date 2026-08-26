@@ -244,28 +244,18 @@ class LibraryPage(BaseTab):
                 db.rename(nid, new_path)
                 reveal_id = nid
                 self.log(f"移动: {row['path']} → {new_path}")
-            else:  # 文件夹 = 路径前缀，整枝改写
+            else:  # 文件夹 = 路径前缀，整枝改写（冲突检查/防呆在 helper 内）
                 prefix = self._folder_iid_of(item)
-                rows = [r["path"] for r in db.list_all()
-                        if r["path"] == prefix or r["path"].startswith(prefix + "/")]
-                if not rows:
-                    continue
-                if self._into_descendant(prefix, dest):
-                    blocked.append(f"{prefix}/（不能移入自身子目录）")
-                    continue
                 tail = prefix.rsplit("/", 1)[-1]
                 new_prefix = f"{dest}/{tail}" if dest else tail
-                plan = [(r, NotesDB.normalize_path(new_prefix + r[len(prefix):]))
-                        for r in rows]
-                if any(db.get_note_by_path(np) is not None
-                       for _, np in plan if np != ""):
-                    blocked.append(f"{prefix}/（目标已有同名）")
+                done, err = self._db_move_prefix(prefix, new_prefix)
+                if not done:
+                    blocked.append(f"{prefix}/（{err}）")
                     continue
-                for old, new in plan:
-                    nid_row = db.get_note_by_path(old)
-                    if nid_row is not None:
-                        db.rename(int(nid_row["id"]), new)
-                reveal_id = reveal_id or (db.get_note_by_path(plan[0][1]) or {"id": None})["id"]
+                first = self.db.get_note_by_path(new_prefix) \
+                    or next((r for r in db.list_all()
+                             if r["path"].startswith(new_prefix + "/")), None)
+                reveal_id = reveal_id or (int(first["id"]) if first else None)
                 self.log(f"移动文件夹: {prefix}/ → {new_prefix}/")
         self.refresh_tree()
         if blocked:
@@ -512,7 +502,8 @@ class LibraryPage(BaseTab):
             act = menu.addAction("打包全库 ZIP", self.pack_all_zip)
             act.setEnabled(bool(self.root_dir))
         else:
-            menu.addAction("新建笔记（根目录）", self.new_note)
+            # 显式根锚点：空白处不读当前选中项（与散装同一纪律）
+            menu.addAction("新建笔记（根目录）", lambda: self._db_new_note_at(""))
             menu.addSeparator()
             menu.addAction("导入文件夹到笔记库…", self.import_folder)
             menu.addAction("导出为文件夹…", self.export_folder)
@@ -1116,9 +1107,6 @@ class LibraryPage(BaseTab):
             self.log(f"保存失败: {e}", "ERROR")
 
     # ── db 侧：CRUD ──
-
-    def new_note(self):
-        self._db_new_note_at(self._current_folder_path())
 
     def _db_new_note_at(self, folder: str):
         db = self._require_db()
