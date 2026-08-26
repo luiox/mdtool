@@ -12,10 +12,12 @@ UI 合并自旧的 文件浏览器 Tab 与 笔记库 Tab：顶部数据源切换
 
 import hashlib
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt, QThread
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QThread
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -32,12 +34,38 @@ from PySide6.QtWidgets import (
 )
 
 import kb_bundle as kbb
+from server.notes_db import NotesDB
 from qtui.icons import file_icon, folder_icon
 from qtui.tabs import file_browser as fb
 from qtui.tabs import notes_browser as nb
 from qtui.tabs.bundle_io import BundleCenterDialog
 from qtui.widgets import BaseTab, PathRow
 from qtui.workers import start_worker
+
+
+class _TreeDropFilter(QObject):
+    """接管库树的 Drop：内部拖拽→真实移动；外部拖入→收 .md。
+
+    事件一律 ignore()，阻止 QTreeWidget 默认的"只重排视图不落盘"。
+    """
+
+    def __init__(self, page):
+        super().__init__(page)
+        self._page = page
+
+    def eventFilter(self, obj, ev):  # noqa: N802 - Qt override
+        if ev.type() == QEvent.Type.Drop:
+            external = ev.source() is None
+            target = self._page.tree.itemAt(ev.position().toPoint())
+            sources = [] if external else list(self._page.tree.selectedItems())
+            urls = list(ev.mimeData().urls()) if external else []
+            ev.ignore()
+            if sources:
+                self._page.handle_tree_drop(sources, target)
+            elif urls:
+                self._page.handle_external_drop(urls, target)
+            return True
+        return False
 
 
 class LibraryPage(BaseTab):
@@ -72,9 +100,215 @@ class LibraryPage(BaseTab):
         self.tree.setIconSize(QSize(16, 16))
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        # 拖拽启用；Drop 事件由过滤器接管（见下），默认视觉重排被禁止
+        self.tree.setDragEnabled(True)
+        self.tree.setAcceptDrops(True)
+        self.tree.setDropIndicatorShown(True)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.tree.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._drop_filter = _TreeDropFilter(self)
+        self.tree.viewport().installEventFilter(self._drop_filter)
+        # 键盘基础操作：F2 重命名 / Delete 删除（按当前模式分发）
+        for keys, fn in ((QKeySequence(Qt.Key.Key_F2), self._rename_current),
+                         (QKeySequence(Qt.Key.Key_Delete), self._delete_current)):
+            sc = QShortcut(keys, self.tree)
+            sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+            sc.activated.connect(fn)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemDoubleClicked.connect(self._on_tree_double_click)
         root.addWidget(self.tree)
+
+    # ── 拖拽 ──
+    # 树是磁盘/数据库的投影，QTreeWidget 默认 InternalMove 只做视觉重排
+    # 不落盘——等于假移动。这里只把"谁拖到了哪"交给 owner 解析执行。
+
+    def handle_tree_drop(self, sources: list, target_item):
+        """拖拽落点：目标为空 = 库根；目标是文件夹 = 其内；是笔记 = 其所在目录。"""
+        if self.mode == "fs":
+            self._fs_drop(sources, target_item)
+        else:
+            self._db_drop(sources, target_item)
+
+    def handle_external_drop(self, urls: list, target_item):
+        """从资源管理器拖入：仅收 .md（散装复制文件，db 写入正文）。"""
+        dest = "" if target_item is None else (
+            self._folder_iid_of(target_item)
+            if target_item.data(0, Qt.ItemDataRole.UserRole) is None
+            else self._folder_iid_of(target_item.parent()))
+        n_in = 0
+        for u in urls:
+            p = Path(u.toLocalFile())
+            if not p.exists():
+                continue
+            candidates = ([p] if p.suffix.lower() == ".md"
+                          else sorted(p.rglob("*.md")) if p.is_dir() else [])
+            if not candidates and p.is_file():
+                self.log(f"跳过非 Markdown: {p.name}", "WARNING")
+            for f in candidates:
+                rel = f"{dest}/{f.name}" if dest else f.name
+                try:
+                    if self.mode == "fs":
+                        notes_root = kbb.resolve_notes_dir(self.root_dir)
+                        dst = notes_root / rel
+                        if dst.exists():
+                            self.log(f"已存在，跳过: {rel}", "WARNING")
+                            continue
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(f, dst)
+                    else:
+                        if self.db.get_note_by_path(rel) is not None:
+                            self.log(f"已存在，跳过: {rel}", "WARNING")
+                            continue
+                        body = f.read_text(encoding="utf-8")
+                        self.db.upsert_note(rel, body)
+                    n_in += 1
+                    self.log(f"拖入: {rel}")
+                except (OSError, UnicodeDecodeError) as e:
+                    self.log(f"拖入失败 {f}: {e}", "ERROR")
+        if n_in:
+            self.refresh_tree()
+
+    def _drop_dest_folder(self, target_item) -> str:
+        if target_item is None:
+            return ""
+        if target_item.data(0, Qt.ItemDataRole.UserRole) is None:
+            return self._folder_iid_of(target_item)
+        parent = target_item.parent()
+        return self._folder_iid_of(parent) if parent is not None else ""
+
+    def _into_descendant(self, src_prefix: str, dest: str) -> bool:
+        return bool(src_prefix) and (dest == src_prefix
+                                     or dest.startswith(src_prefix + "/"))
+
+    def _fs_drop(self, sources: list, target_item):
+        notes_root = self._fs_notes_root()
+        if notes_root is None:
+            return
+        dest = self._drop_dest_folder(target_item)
+        blocked: list[str] = []
+        moved_first = None
+        for item in sources:
+            rel = self._fs_item_rel(item)
+            if rel is None:
+                continue
+            is_dir = item.data(0, Qt.ItemDataRole.UserRole) is None
+            prefix = rel if is_dir else ""
+            if self._into_descendant(prefix, dest):
+                blocked.append(f"{rel}（不能移入自身/子目录）")
+                continue
+            name = rel.rsplit("/", 1)[-1]
+            dst_rel = f"{dest}/{name}" if dest else name
+            if dst_rel == rel:
+                continue
+            src_p, dst_p = notes_root / rel, notes_root / dst_rel
+            if dst_p.exists():
+                blocked.append(f"{dst_rel}（已存在）")
+                continue
+            try:
+                dst_p.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src_p), str(dst_p))
+            except OSError as e:
+                blocked.append(f"{rel}（{e}）")
+                continue
+            if moved_first is None:
+                moved_first = dst_rel
+            self.log(f"移动: {rel} → {dst_rel}")
+        self.refresh_tree()
+        if blocked:
+            QMessageBox.warning(self, "部分未移动", "\n".join(blocked))
+        if moved_first:
+            self._reveal_rel(moved_first)
+
+    def _db_drop(self, sources: list, target_item):
+        db = self.db
+        if db is None:
+            return
+        dest = self._drop_dest_folder(target_item)
+        blocked: list[str] = []
+        reveal_id = None
+        for item in sources:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data is not None:  # 笔记
+                nid = int(data)
+                row = db.get_note(nid)
+                if row is None:
+                    continue
+                name = row["path"].rsplit("/", 1)[-1]
+                new_path = NotesDB.normalize_path(
+                    f"{dest}/{name}" if dest else name)
+                if new_path == row["path"]:
+                    continue
+                if db.get_note_by_path(new_path) is not None:
+                    blocked.append(f"{new_path}（已存在）")
+                    continue
+                db.rename(nid, new_path)
+                reveal_id = nid
+                self.log(f"移动: {row['path']} → {new_path}")
+            else:  # 文件夹 = 路径前缀，整枝改写
+                prefix = self._folder_iid_of(item)
+                rows = [r["path"] for r in db.list_all()
+                        if r["path"] == prefix or r["path"].startswith(prefix + "/")]
+                if not rows:
+                    continue
+                if self._into_descendant(prefix, dest):
+                    blocked.append(f"{prefix}/（不能移入自身子目录）")
+                    continue
+                tail = prefix.rsplit("/", 1)[-1]
+                new_prefix = f"{dest}/{tail}" if dest else tail
+                plan = [(r, NotesDB.normalize_path(new_prefix + r[len(prefix):]))
+                        for r in rows]
+                if any(db.get_note_by_path(np) is not None
+                       for _, np in plan if np != ""):
+                    blocked.append(f"{prefix}/（目标已有同名）")
+                    continue
+                for old, new in plan:
+                    nid_row = db.get_note_by_path(old)
+                    if nid_row is not None:
+                        db.rename(int(nid_row["id"]), new)
+                reveal_id = reveal_id or (db.get_note_by_path(plan[0][1]) or {"id": None})["id"]
+                self.log(f"移动文件夹: {prefix}/ → {new_prefix}/")
+        self.refresh_tree()
+        if blocked:
+            QMessageBox.warning(self, "部分未移动", "\n".join(blocked))
+        if reveal_id:
+            self._reveal_note(reveal_id)
+
+    def _reveal_rel(self, rel: str):
+        """刷新后按相对路径逐段定位并选中（fs）。"""
+        cur = self.tree.invisibleRootItem()
+
+        def find(node, seg):
+            for i in range(node.childCount()):
+                ch = node.child(i)
+                if ch.text(0) == seg:
+                    return ch
+            return None
+
+        for seg in rel.split("/"):
+            nxt = find(cur, seg) if cur is not None else None
+            if nxt is None:
+                return
+            cur = nxt
+        if cur is not None:
+            self.tree.setCurrentItem(cur)
+            self.tree.scrollToItem(cur)
+
+    def _reveal_note(self, note_id: int):
+        def walk(node) -> Optional[object]:
+            for i in range(node.childCount()):
+                ch = node.child(i)
+                if ch.data(0, Qt.ItemDataRole.UserRole) == str(note_id) \
+                        or ch.data(0, Qt.ItemDataRole.UserRole) == note_id:
+                    return ch
+                hit = walk(ch)
+                if hit is not None:
+                    return hit
+            return None
+
+        hit = walk(self.tree.invisibleRootItem())
+        if hit is not None:
+            self.tree.setCurrentItem(hit)
+            self.tree.scrollToItem(hit)
 
     # ── 模式切换 ──
 
@@ -248,14 +482,16 @@ class LibraryPage(BaseTab):
         item = self.tree.itemAt(pos)
         menu = QMenu(self)
         if item is None:
-            # 空白处：当前模式的全局操作
-            self._global_menu(menu)
+            # 空白处 = 库根。锚点显式为 ""——绝不吸附当前选中项，
+            # 否则连建两个平级文件夹都会嵌进第一个里
+            self._global_menu(menu, anchor="")
         else:
             self.tree.setCurrentItem(item)
             if self.mode == "fs":
-                self._fs_menu(menu, item)
+                anchor = self._fs_anchor_for_item(item)
+                self._fs_menu(menu, item, anchor)
                 menu.addSeparator()
-                self._global_menu(menu)
+                self._global_menu(menu, anchor=anchor)
             else:
                 self._db_menu(menu, item)
                 menu.addSeparator()
@@ -263,12 +499,22 @@ class LibraryPage(BaseTab):
         if menu.actions():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
 
-    def _global_menu(self, menu: QMenu):
-        """模式级操作（原工具行按钮全部收编于此）。"""
+    def _fs_anchor_for_item(self, item: QTreeWidgetItem) -> str:
+        """新建类操作的锚点目录：笔记 → 所在目录；文件夹 → 自身。"""
+        rel = self._fs_item_rel(item)
+        if rel is None:
+            return ""
+        if item.data(0, Qt.ItemDataRole.UserRole) is not None:
+            return rel.rpartition("/")[0]
+        return rel
+
+    def _global_menu(self, menu: QMenu, anchor: str = ""):
+        """模式级操作（原工具行按钮全部收编于此）。anchor = 新建落点目录。"""
         if self.mode == "fs":
-            act = menu.addAction("新建文件夹…", self._fs_new_folder)
+            act = menu.addAction("新建文件夹…", lambda: self._fs_new_folder(anchor))
             act.setEnabled(bool(self.root_dir))
-            act = menu.addAction("新建 Markdown 文件…", self._fs_new_note_here)
+            act = menu.addAction("新建 Markdown 文件…",
+                                 lambda: self._fs_new_note_at(anchor))
             act.setEnabled(bool(self.root_dir))
             menu.addSeparator()
             act = menu.addAction("打包全库 ZIP", self.pack_all_zip)
@@ -290,7 +536,7 @@ class LibraryPage(BaseTab):
         menu.addSeparator()
         menu.addAction("刷新", self.refresh_tree)
 
-    def _fs_menu(self, menu: QMenu, item: QTreeWidgetItem):
+    def _fs_menu(self, menu: QMenu, item: QTreeWidgetItem, anchor: str = ""):
         rel = self._fs_item_rel(item)
         if rel is None:
             return
@@ -311,8 +557,8 @@ class LibraryPage(BaseTab):
         menu.addAction(label, lambda: self.open_bundle_center(
             pre_rels=[kbb.note_rel(p, self.root_dir) for p in md_files]))
         menu.addSeparator()
-        menu.addAction("新建文件夹…", self._fs_new_folder)
-        menu.addAction("新建 Markdown 文件…", self._fs_new_note_here)
+        menu.addAction("新建文件夹…", lambda: self._fs_new_folder(anchor))
+        menu.addAction("新建 Markdown 文件…", lambda: self._fs_new_note_at(anchor))
 
     def _db_menu(self, menu: QMenu, item: QTreeWidgetItem):
         if item.data(0, Qt.ItemDataRole.UserRole) is not None:
@@ -344,37 +590,39 @@ class LibraryPage(BaseTab):
 
     # ── 散装侧操作 ──
 
-    def _fs_new_folder(self):
-        """在当前选中位置（或根）新建真实文件夹——散装库目录真实存在于磁盘。"""
+    def _fs_new_folder(self, folder: str = "") -> Optional[str]:
+        """在锚点目录（默认根）新建真实文件夹；返回新 rel 供选中定位。"""
         notes_root = self._fs_notes_root()
         if notes_root is None:
             QMessageBox.warning(self, "警告", "请先在顶栏选择知识库根目录")
-            return
-        folder = self._current_folder_path()
+            return None
         name, ok = QInputDialog.getText(self, "新建文件夹", "文件夹名称：")
         if not ok or not name:
-            return
+            return None
         name = name.strip().strip("/\\")
         if not name or "/" in name or "\\" in name or any(c in name for c in '<>:"|?*'):
             QMessageBox.warning(self, "提示", f"名称不合法: {name}")
-            return
+            return None
         target = notes_root / folder / name if folder else notes_root / name
         if target.exists():
             QMessageBox.warning(self, "提示", f"已存在同名文件夹: {name}")
-            return
+            return None
         try:
             target.mkdir(parents=True)
         except OSError as e:
             QMessageBox.critical(self, "新建文件夹失败", str(e))
-            return
-        self.log(f"新建文件夹: {target.relative_to(notes_root).as_posix()}")
+            return None
+        new_rel = f"{folder}/{name}" if folder else name
+        self.log(f"新建文件夹: {new_rel}")
         self.refresh_tree()
+        self._reveal_rel(new_rel)
+        return new_rel
 
-    def _fs_new_note_here(self):
+    def _fs_new_note_at(self, folder: str = ""):
+        """在锚点目录新建 .md；名字可含子路径（自动建父级）。"""
         if not self.root_dir:
             QMessageBox.warning(self, "警告", "请先在顶栏选择知识库根目录")
             return
-        folder = self._current_folder_path().replace("/", os.sep)
         name, ok = QInputDialog.getText(
             self, "新建笔记", "笔记文件名（可含子路径，如 sub/名字.md）：",
             text="未命名.md")
@@ -389,9 +637,25 @@ class LibraryPage(BaseTab):
             return
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"# {target.stem}\n", encoding="utf-8")
-        self.log(f"新建笔记: {target.relative_to(notes_root).as_posix()}")
+        new_rel = target.relative_to(notes_root).as_posix()
+        self.log(f"新建笔记: {new_rel}")
         self.refresh_tree()
+        self._reveal_rel(new_rel)
         fb.open_external(target)
+
+    def _rename_current(self):
+        """F2：按模式分发到重命名。"""
+        if self.tree.currentItem() is None:
+            return
+        (self._fs_rename_selected if self.mode == "fs"
+         else self._db_rename_selected)()
+
+    def _delete_current(self):
+        """Delete：按模式分发到删除。"""
+        if self.tree.currentItem() is None:
+            return
+        (self._fs_delete_selected if self.mode == "fs"
+         else self._db_delete_selected)()
 
     def _fs_rename_selected(self):
         notes_root = self._fs_notes_root()
