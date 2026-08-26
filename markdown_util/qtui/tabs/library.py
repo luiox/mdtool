@@ -35,7 +35,7 @@ import kb_bundle as kbb
 from qtui.icons import file_icon, folder_icon
 from qtui.tabs import file_browser as fb
 from qtui.tabs import notes_browser as nb
-from qtui.tabs.bundle_io import BundleImportDialog, ExportOptionsDialog, bundle_export_job
+from qtui.tabs.bundle_io import BundleCenterDialog
 from qtui.widgets import BaseTab, PathRow
 from qtui.workers import start_worker
 
@@ -260,8 +260,6 @@ class LibraryPage(BaseTab):
         if self.mode == "fs":
             act = menu.addAction("打包全库 ZIP", self.pack_all_zip)
             act.setEnabled(bool(self.root_dir))
-            act = menu.addAction("全库导出合并包…", lambda: self.export_bundle("zip", all_notes=True))
-            act.setEnabled(bool(self.root_dir))
         else:
             menu.addAction("新建笔记（根目录）", self.new_note)
             menu.addAction("导入文件夹到笔记库…", self.import_folder)
@@ -275,7 +273,7 @@ class LibraryPage(BaseTab):
             menu.addAction("打开笔记库 (.db)…", self.main_window.pick_db_file)
             menu.addAction("新建笔记库…", self.main_window.create_db_file)
         menu.addSeparator()
-        menu.addAction("导入合并包…", self.import_bundle_wizard)
+        menu.addAction("导入导出中心…", lambda: self.open_bundle_center())
         menu.addSeparator()
         menu.addAction("刷新", self.refresh_tree)
 
@@ -296,10 +294,9 @@ class LibraryPage(BaseTab):
             if len(md_files) == 1 and md_files[0].suffix.lower() == ".md":
                 menu.addAction("迁移图片到图床", self.migrate_images)
         n = len(md_files)
-        menu.addAction(f"导出合并包 ZIP（{n} 篇）…" if n > 1 else "导出合并包 ZIP…",
-                       lambda: self.export_bundle("zip"))
-        menu.addAction(f"导出合并包 DB（{n} 篇）…" if n > 1 else "导出合并包 DB…",
-                       lambda: self.export_bundle("db"))
+        label = f"导出 / 导入（已选 {n} 篇）…" if n > 1 else "导出 / 导入…"
+        menu.addAction(label, lambda: self.open_bundle_center(
+            pre_rels=[kbb.note_rel(p, self.root_dir) for p in md_files]))
         menu.addAction("在此新建笔记", self._fs_new_note_here)
 
     def _db_menu(self, menu: QMenu, item: QTreeWidgetItem):
@@ -312,11 +309,9 @@ class LibraryPage(BaseTab):
             menu.addAction("在此新建笔记", self.new_note)
         paths = self._db_selected_note_paths()
         if paths:
-            n = len(paths)
-            menu.addAction(f"导出合并包 ZIP（{n} 篇）…" if n > 1 else "导出合并包 ZIP…",
-                           lambda: self.export_bundle("zip"))
-            menu.addAction(f"导出合并包 DB（{n} 篇）…" if n > 1 else "导出合并包 DB…",
-                           lambda: self.export_bundle("db"))
+            label = (f"导出 / 导入（已选 {len(paths)} 篇）…" if len(paths) > 1
+                     else "导出 / 导入…")
+            menu.addAction(label, lambda: self.open_bundle_center(pre_rels=paths))
 
     def _on_tree_double_click(self, item, _col):
         data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -492,83 +487,12 @@ class LibraryPage(BaseTab):
                 exact.add(path)
         return sorted(exact)
 
-    def _bundle_source_notes(self, all_notes: bool = False) -> Optional[list[tuple[str, str]]]:
-        """当前选中（或全库）→ [(笔记树相对路径, 内容)]；两种模式都支持多选。"""
-        if self.mode == "fs":
-            if not self.root_dir:
-                QMessageBox.warning(self, "警告", "请先在顶栏选择知识库根目录")
-                return None
-            md_files = ([p for _, p in fb.list_md_tree(self.root_dir)] if all_notes
-                        else self._fs_selected_md_files())
-            notes = []
-            for p in md_files:
-                try:
-                    # 身份 = 笔记树内相对路径（markdown/ 优先双名解析），不是 KB 根相对路径
-                    notes.append((kbb.note_rel(p, self.root_dir),
-                                  p.read_text(encoding="utf-8")))
-                except (OSError, UnicodeDecodeError) as e:
-                    self.log(f"读取失败（跳过）: {p} — {e}", "WARNING")
-            if not notes:
-                QMessageBox.warning(self, "警告", "没有可导出的 .md 文件")
-                return None
-            return notes
-        if self._require_db() is None:
-            return None
-        paths = (sorted(r["path"] for r in self.db.list_all()) if all_notes
-                 else self._db_selected_note_paths())
-        if not paths:
-            QMessageBox.warning(self, "警告", "请先选中要导出的笔记")
-            return None
-        return [(p, self.db.get_note_by_path(p)["body"]) for p in paths]
+    def open_bundle_center(self, pre_rels=None):
+        """打开「导入导出中心」窗口：树形勾选导出范围 / 读包对账导入。
 
-    def export_bundle(self, container: str, all_notes: bool = False):
-        """导出合并包：选项对话框 → 保存路径 → worker 计划并写包。"""
-        source_notes = self._bundle_source_notes(all_notes=all_notes)
-        if not source_notes:
-            return
-
-        media_root = self._media_root_for_bundle()
-        fs_mode = self.mode == "fs" and bool(self.root_dir)
-        if not fs_mode and media_root is None:
-            QMessageBox.warning(
-                self, "提示",
-                "db 模式导出需要先在「媒体服务器」页设置媒体根目录，\n"
-                "否则无法定位笔记引用的图片与附件。")
-            return
-        src_root = self.root_dir if fs_mode else media_root
-        meta_db = None if fs_mode else self.config.get("db_path")
-        cfg = kbb.ensure_kb_config(src_root) if fs_mode and src_root else \
-            kbb.load_kb_config(media_root) if media_root else dict(kbb.DEFAULT_KB_CONFIG)
-
-        dlg = ExportOptionsDialog(self, notes=source_notes,
-                                  source_root=src_root or Path.cwd(),
-                                  kb_config=cfg, media_root=media_root)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        out_path, _ = QFileDialog.getSaveFileName(
-            self, "保存合并包", f"合并包{'.db' if container == 'db' else '.zip'}",
-            "SQLite 数据库 (*.db)" if container == "db" else "ZIP 文件 (*.zip)")
-        if not out_path:
-            return
-        opt = dlg.options()
-        start_worker(
-            bundle_export_job, out_path=out_path, container=container,
-            notes=source_notes,
-            source_root=str(src_root) if fs_mode and src_root else None,
-            kb_config=cfg,
-            media_root=str(media_root) if media_root else None,
-            meta_db=meta_db,
-            include_images=opt["include_images"],
-            include_assets=opt["include_assets"],
-            max_asset_bytes=opt["max_asset_bytes"],
-            on_log=self.log,
-            on_finished=lambda r: self.log(
-                "合并包导出完成: {notes} 篇、媒体 {media} 个 → {path}".format(**r)),
-            on_error=lambda e: self.log(f"导出失败: {e}", "ERROR"),
-        )
-
-    def import_bundle_wizard(self):
-        """导入合并包（zip / db / 仓库形式文件夹）：向导内对账、diff、应用。"""
+        ``pre_rels``：右键带入的当前选中笔记（笔记树相对路径），在导出页
+        预先勾选；None = 全选。
+        """
         target_root = None
         target_db = None
         if self.mode == "fs":
@@ -580,10 +504,21 @@ class LibraryPage(BaseTab):
             target_db = self.db
         else:
             return
-        dlg = BundleImportDialog(
+        media_root = self._media_root_for_bundle()
+        fs_mode = self.mode == "fs"
+        if not fs_mode and media_root is None:
+            QMessageBox.warning(
+                self, "提示",
+                "db 模式导出需要先在「媒体服务器」页设置媒体根目录，\n"
+                "否则无法定位笔记引用的图片与附件（导入不受影响）。")
+        src_root = target_root if fs_mode else media_root
+        cfg = kbb.ensure_kb_config(src_root) if fs_mode and src_root else \
+            kbb.load_kb_config(media_root) if media_root else dict(kbb.DEFAULT_KB_CONFIG)
+        dlg = BundleCenterDialog(
             self, target_kind=self.mode, target_root=target_root,
-            target_db=target_db, target_media_root=self._media_root_for_bundle(),
-            log=self.log)
+            target_db=target_db, target_media_root=media_root,
+            meta_db=(None if fs_mode else self.config.get("db_path")),
+            kb_config=cfg, log=self.log, pre_selected_rels=pre_rels)
         dlg.exec()
         if dlg.applied:
             self.refresh_tree()
