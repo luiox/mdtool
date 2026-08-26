@@ -209,25 +209,15 @@ class MainWindow(QMainWindow):
         self.library_page._set_mode("fs")
         self.update_title()
 
-    def pick_db_file(self, force_dialog: bool = False):
-        """「db 容器」按钮：语义是**打开**——已配置的库直接打开切换，
-        绝不诱导覆盖既有文件。未配置/文件失效或显式要求时才弹选择框
-        （只选已有 .db；新建走 :meth:`create_db_file`）。"""
+    def pick_db_file(self):
+        """「db 容器」按钮：与「散装目录」同语义——每次都弹选择框，
+        打开用户指定的 .db 库并切换。上次路径仅作为对话框起始位置，
+        绝不替用户决定打开哪个库；新建走 :meth:`create_db_file`。
+        """
         lib = self.library_page
-        cfg_path = lib.config.get("db_path")
-        if not force_dialog and cfg_path and Path(cfg_path).is_file():
-            already = (lib.mode == "db" and lib.db is not None
-                       and Path(lib.db.db_path) == Path(cfg_path))
-            if not already:
-                lib.open_db_file(cfg_path)
-                if lib.db is None:  # 打开失败已记日志
-                    return
-            lib._set_mode("db")
-            self.update_title()
-            return
-        start_dir = str(cfg_path or "")
+        start_dir = str(lib.config.get("db_path") or "")
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择笔记库 .db 文件", start_dir,
+            self, "选择要打开的笔记库 (.db)", start_dir,
             "SQLite 数据库 (*.db);;所有文件 (*.*)")
         if path:
             self._open_db_and_switch(path)

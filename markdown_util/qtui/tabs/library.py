@@ -263,15 +263,17 @@ class LibraryPage(BaseTab):
             act = menu.addAction("全库导出合并包…", lambda: self.export_bundle("zip", all_notes=True))
             act.setEnabled(bool(self.root_dir))
         else:
-            if self.main_window is not None:
-                menu.addAction("打开其他笔记库…",
-                               lambda: self.main_window.pick_db_file(force_dialog=True))
-                menu.addAction("新建笔记库…", self.main_window.create_db_file)
             menu.addAction("新建笔记（根目录）", self.new_note)
             menu.addAction("导入文件夹到笔记库…", self.import_folder)
             menu.addAction("导出为文件夹…", self.export_folder)
             menu.addSeparator()
             menu.addAction("编辑器与落地目录设置…", self.edit_library_settings)
+        # 库级入口两种模式都给：新建/切换 .db 不能依赖已处于 db 模式，
+        # 否则没打开过任何库时永远进不去 db 模式（死锁）
+        if self.main_window is not None:
+            menu.addSeparator()
+            menu.addAction("打开笔记库 (.db)…", self.main_window.pick_db_file)
+            menu.addAction("新建笔记库…", self.main_window.create_db_file)
         menu.addSeparator()
         menu.addAction("导入合并包…", self.import_bundle_wizard)
         menu.addSeparator()
