@@ -81,6 +81,13 @@ class SearchPage(BaseTab):
             return mode, "未选择知识库根目录——请先在顶栏点「散装目录」选择"
         return mode, None
 
+    def _fs_notes_root(self):
+        """散装视图根 = 笔记树目录（markdown/ 优先双名兼容），与笔记库页一致。"""
+        if not self.root_dir:
+            return None
+        import kb_bundle as kbb
+        return kbb.resolve_notes_dir(self.root_dir)
+
     def _refresh_hint(self):
         mode, err = self._current_source()
         if err:
@@ -90,7 +97,8 @@ class SearchPage(BaseTab):
             db_path = self.main_window.library_page.config.get("db_path", "")
             self.src_hint.setText(f"搜索目标: 笔记库容器 · {db_path}")
         else:
-            self.src_hint.setText(f"搜索目标: 散装目录 · {self.root_dir}")
+            notes_root = self._fs_notes_root()
+            self.src_hint.setText(f"搜索目标: 散装笔记 · {notes_root}")
 
     def showEvent(self, event):  # noqa: N802 - Qt override
         """进入页面时刷新源提示（模式可能在别处被切换）。"""
@@ -139,7 +147,8 @@ class SearchPage(BaseTab):
         self.progress.setValue(0)
         self.log(f"开始搜索「{pattern}」(范围={self.search_bar.scope_text()})")
         start_worker(
-            fb._search_md_job, root=self.root_dir, pattern=pattern, scope=scope,
+            fb._search_md_job,
+            root=self._fs_notes_root(), pattern=pattern, scope=scope,
             on_progress=lambda cur, tot: (self.progress.setMaximum(max(tot, 1)),
                                           self.progress.setValue(cur)),
             on_log=self.log,
@@ -186,9 +195,10 @@ class SearchPage(BaseTab):
         if item is None:
             return
         if self._result_mode == "fs":
-            if self.root_dir:
+            notes_root = self._fs_notes_root()
+            if notes_root:
                 rel = item.data(Qt.ItemDataRole.UserRole) or item.text()
-                fb.open_external(self.root_dir / rel)
+                fb.open_external(notes_root / rel)
         else:
             try:
                 nid = int(self.results.item(row, 3).text())

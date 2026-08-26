@@ -209,27 +209,49 @@ class MainWindow(QMainWindow):
         self.library_page._set_mode("fs")
         self.update_title()
 
-    def pick_db_file(self):
-        """「db 容器」按钮 / 笔记库右键菜单：选 .db 文件并打开切换。
+    def pick_db_file(self, force_dialog: bool = False):
+        """「db 容器」按钮：语义是**打开**——已配置的库直接打开切换，
+        绝不诱导覆盖既有文件。未配置/文件失效或显式要求时才弹选择框
+        （只选已有 .db；新建走 :meth:`create_db_file`）。"""
+        lib = self.library_page
+        cfg_path = lib.config.get("db_path")
+        if not force_dialog and cfg_path and Path(cfg_path).is_file():
+            already = (lib.mode == "db" and lib.db is not None
+                       and Path(lib.db.db_path) == Path(cfg_path))
+            if not already:
+                lib.open_db_file(cfg_path)
+                if lib.db is None:  # 打开失败已记日志
+                    return
+            lib._set_mode("db")
+            self.update_title()
+            return
+        start_dir = str(cfg_path or "")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择笔记库 .db 文件", start_dir,
+            "SQLite 数据库 (*.db);;所有文件 (*.*)")
+        if path:
+            self._open_db_and_switch(path)
 
-        选到不存在的路径时先确认再新建，防止手滑打错名静默生成空库。
-        """
+    def create_db_file(self):
+        """新建笔记库：指定新 .db 路径并初始化空库（schema 自动建表）。"""
         start_dir = str(self.library_page.config.get("db_path") or "")
         path, _ = QFileDialog.getSaveFileName(
-            self, "选择已有 .db 或输入新文件名（新建）", start_dir,
+            self, "新建笔记库（指定 .db 文件名）", start_dir,
             "SQLite 数据库 (*.db);;所有文件 (*.*)")
         if not path:
             return
-        if not Path(path).exists():
-            if QMessageBox.question(
-                self, "新建笔记库",
-                f"文件不存在：\n{path}\n\n是否新建该笔记库？"
-            ) != QMessageBox.StandardButton.Yes:
-                return
-        self.library_page.open_db_file(path)
-        if self.library_page.db is None:  # 打开失败（open_db_file 内已记日志）
+        if Path(path).exists() and QMessageBox.question(
+            self, "确认", f"文件已存在：\n{path}\n\n将其作为笔记库打开？"
+        ) != QMessageBox.StandardButton.Yes:
             return
-        self.library_page._set_mode("db")
+        self._open_db_and_switch(path)
+
+    def _open_db_and_switch(self, path: str):
+        lib = self.library_page
+        lib.open_db_file(path)
+        if lib.db is None:
+            return
+        lib._set_mode("db")
         self.update_title()
 
     def update_title(self):

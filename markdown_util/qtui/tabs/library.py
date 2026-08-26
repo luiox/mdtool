@@ -114,8 +114,17 @@ class LibraryPage(BaseTab):
         else:
             self._db_build_tree()
 
-    def _fs_build_tree(self):
+    def _fs_notes_root(self) -> Optional[Path]:
+        """散装视图根 = 笔记树目录。markdown/ 是笔记的根而非仓库根，
+        不应作为树的一级层级出现（双名兼容：无 markdown/ 时退 notes/，
+        存量散装布局退根本身）。"""
         if not self.root_dir:
+            return None
+        return kbb.resolve_notes_dir(self.root_dir)
+
+    def _fs_build_tree(self):
+        notes_root = self._fs_notes_root()
+        if notes_root is None:
             return
         folders: dict[str, QTreeWidgetItem] = {}
 
@@ -133,7 +142,7 @@ class LibraryPage(BaseTab):
             folders[folder_path] = item
             return item
 
-        for rel, _abs in fb.list_md_tree(self.root_dir):
+        for rel, _abs in fb.list_md_tree(notes_root):
             folder, _, name = rel.rpartition("/")
             parent = ensure_folder(folder) if folder else self.tree.invisibleRootItem()
             item = QTreeWidgetItem(parent, [name])
@@ -206,16 +215,19 @@ class LibraryPage(BaseTab):
         return self._folder_iid_of(item)
 
     def _fs_selected_md_files(self) -> list[Path]:
-        """当前选中的 .md；目录递归收集。"""
+        """当前选中的 .md；目录递归收集（相对笔记树根解析）。"""
         items = self.tree.selectedItems()
         if not items and self.tree.currentItem() is not None:
             items = [self.tree.currentItem()]
+        notes_root = self._fs_notes_root()
+        if notes_root is None:
+            return []
         md_files: list[Path] = []
         for it in items:
             rel = self._fs_item_rel(it)
             if rel is None:
                 continue
-            p = self.root_dir / rel
+            p = notes_root / rel
             if p.is_dir():
                 md_files.extend(p.rglob("*.md"))
             elif p.suffix.lower() == ".md":
@@ -252,7 +264,9 @@ class LibraryPage(BaseTab):
             act.setEnabled(bool(self.root_dir))
         else:
             if self.main_window is not None:
-                menu.addAction("选择笔记库文件…", self.main_window.pick_db_file)
+                menu.addAction("打开其他笔记库…",
+                               lambda: self.main_window.pick_db_file(force_dialog=True))
+                menu.addAction("新建笔记库…", self.main_window.create_db_file)
             menu.addAction("新建笔记（根目录）", self.new_note)
             menu.addAction("导入文件夹到笔记库…", self.import_folder)
             menu.addAction("导出为文件夹…", self.export_folder)
@@ -308,8 +322,8 @@ class LibraryPage(BaseTab):
             return
         if self.mode == "db":
             self._db_open_note_for_edit(int(data))
-        elif self.root_dir:
-            fb.open_external(self.root_dir / str(data))
+        elif self._fs_notes_root() is not None:
+            fb.open_external(self._fs_notes_root() / str(data))
 
     # ── 散装侧操作 ──
 
@@ -322,7 +336,8 @@ class LibraryPage(BaseTab):
                                         text="未命名.md")
         if not ok or not name:
             return
-        target = self.root_dir / folder / name if folder else self.root_dir / name
+        notes_root = self._fs_notes_root()
+        target = notes_root / folder / name if folder else notes_root / name
         if not target.suffix:
             target = target.with_suffix(".md")
         if target.exists():
@@ -330,12 +345,13 @@ class LibraryPage(BaseTab):
             return
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"# {target.stem}\n", encoding="utf-8")
-        self.log(f"新建笔记: {target.relative_to(self.root_dir).as_posix()}")
+        self.log(f"新建笔记: {target.relative_to(notes_root).as_posix()}")
         self.refresh_tree()
         fb.open_external(target)
 
     def _fs_rename_selected(self):
-        if not self.root_dir:
+        notes_root = self._fs_notes_root()
+        if notes_root is None:
             return
         rel = self._fs_item_rel(self.tree.currentItem())
         if rel is None or not rel.lower().endswith(".md"):
@@ -345,7 +361,7 @@ class LibraryPage(BaseTab):
             self, "重命名/移动", "新的相对路径（用 / 分隔文件夹）：", text=rel)
         if not ok or not new_rel or new_rel == rel:
             return
-        src, dst = self.root_dir / rel, self.root_dir / new_rel
+        src, dst = notes_root / rel, notes_root / new_rel
         if dst.exists():
             QMessageBox.warning(self, "提示", f"目标已存在: {new_rel}")
             return
@@ -359,7 +375,8 @@ class LibraryPage(BaseTab):
         self.refresh_tree()
 
     def _fs_delete_selected(self):
-        if not self.root_dir:
+        notes_root = self._fs_notes_root()
+        if notes_root is None:
             return
         rel = self._fs_item_rel(self.tree.currentItem())
         if rel is None or not rel.lower().endswith(".md"):
@@ -370,7 +387,7 @@ class LibraryPage(BaseTab):
                                 ) != QMessageBox.StandardButton.Yes:
             return
         try:
-            (self.root_dir / rel).unlink()
+            (notes_root / rel).unlink()
         except OSError as e:
             QMessageBox.critical(self, "删除失败", str(e))
             return
@@ -386,14 +403,15 @@ class LibraryPage(BaseTab):
     # ── zip 导出（散装）──
 
     def pack_all_zip(self):
-        if not self.root_dir:
+        notes_root = self._fs_notes_root()
+        if notes_root is None:
             QMessageBox.warning(self, "警告", "请先选择知识库根目录")
             return
-        md_files = [p for _, p in fb.list_md_tree(self.root_dir)]
+        md_files = [p for _, p in fb.list_md_tree(notes_root)]
         if not md_files:
-            QMessageBox.warning(self, "警告", "知识库根目录下没有 .md 文件")
+            QMessageBox.warning(self, "警告", "知识库下没有 .md 文件")
             return
-        self._pack_zip(md_files, base=self.root_dir, default_name="知识库导出.zip")
+        self._pack_zip(md_files, base=notes_root, default_name="知识库导出.zip")
 
     def pack_to_zip(self):
         md_files = self._fs_selected_md_files()
