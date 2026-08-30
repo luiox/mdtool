@@ -1,9 +1,43 @@
 [project]
 name = "mdtool"
 version = "0.2.1"
-description = "Markdown 笔记工具集（monorepo：markdown_util + libmarkdown + typora-uploader）"
+description = "Markdown 笔记工具集（monorepo：mdtool 桌面+CLI + libmarkdown + typora-uploader + android）"
+readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+    "pyside6>=6.11.1",
+    "watchdog>=4.0",
+]
 
-# 这是 monorepo 的版本权威来源（single source of truth）。所有子项目的版本
-# 由 scripts/version.py sync 从这里同步过去，请勿手动改子项目的版本号。
+# 本文件同时是 monorepo 的版本权威来源（single source of truth）。libmarkdown
+# 与 typora-uploader 的版本由 scripts/version.py sync 从这里同步，勿手动改。
 # 发版流程：scripts/version.py bump <level> → git tag vX.Y.Z → git push → CI 自动发布
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# mdtool/ 平铺在仓库根（uv_build 默认找 src/ 布局，这里指回项目根）
+module-name = "mdtool"
+module-root = ""
+
+[project.scripts]
+mdtool = "mdtool.cli.main:main"
+
+[project.optional-dependencies]
+ast = [
+    "libmarkdown",
+]
+
+[tool.uv.sources]
+libmarkdown = { path = "libmarkdown" }
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.20.0",
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["mdtool/tests"]

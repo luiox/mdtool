@@ -55,7 +55,7 @@ jobs:
         with:
           name: mdtool-${{ steps.ver.outputs.version }}
           path: |
-            dist/MarkdownUtilQt.exe
+            dist/MdTool.exe
             dist/typora-uploader.exe
           if-no-files-found: error
 
@@ -66,5 +66,5 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true   # GitHub 自动生成 "What's Changed"
           files: |
-            dist/MarkdownUtilQt.exe
+            dist/MdTool.exe
             dist/typora-uploader.exe

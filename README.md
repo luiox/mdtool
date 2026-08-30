@@ -1,4 +1,4 @@
-# mdtool（mdnote_util）
+# mdtool
 
 个人 Markdown 知识库管理器 + Markdown 工具集。
 
@@ -14,7 +14,7 @@
 
 | 目录 | 说明 |
 | --- | --- |
-| `markdown_util/` | PySide6 桌面应用（入口 `main_qt.py`） |
+| `mdtool/` | Python 包：`core/`（链接解析、合并包、媒体服务器与 db）+ `desktop/`（PySide6 桌面应用）+ `cli/`（import-media 命令行） |
 | `libmarkdown/` | 幂等 Markdown AST 读写库：读入 AST → 修改节点 → 写回，未修改部分逐字保留（字节级一致） |
 | `typora-uploader/` | Rust 编写的 Typora 自定义图片上传器，把图片上传到本地图床并输出 URL |
 | `android/` | 安卓只读阅读器（Kotlin + Compose + flexmark + NanoHTTPD） |
@@ -41,7 +41,7 @@
 - **db 容器（"内存态"）模式**：所有笔记正文存在单个 `notes.db`（SQLite）里，目录结构由 `path` 字段隐式表达；磁盘只是临时落地场所（默认系统 temp，可配置为 RAM 盘路径），经临时文件 + watchdog 自动回写。图片仍以 `http://127.0.0.1:8765/...` URL 引用，不进库。适用"不能/不想持久落地 markdown"的环境。
 - **互转**：笔记库标签页的"导入文件夹"（散装 → db）与"导出为文件夹"（db → 散装）。
 
-图片/附件管理规范详见 [`markdown_util/图片和附件管理规范.md`](markdown_util/图片和附件管理规范.md)，要点：
+图片/附件管理规范详见 [`docs/图片和附件管理规范.md`](docs/图片和附件管理规范.md)，要点：
 
 - 本地图床服务器默认监听 `127.0.0.1:8765`（与 Typora 约定一致，可在应用内调整端口）。
 - 媒体根目录下**扁平化**存放：`images/`（图片）、`assets/`（附件）、`meta.db`（SQLite 元信息：原始文件名、大小、MIME、上传时间）。
@@ -57,12 +57,12 @@
 cd typora-uploader
 cargo build --release          # 产物: target/release/typora-uploader.exe
 
-# 2. 安装 Python 依赖（含本地 libmarkdown，--extra ast 必装）
-cd ..\markdown_util
+# 2. 安装 Python 依赖并启动桌面应用（仓库根目录；含本地 libmarkdown，--extra ast 必装）
 uv sync --extra ast
+uv run python -m mdtool.desktop
 
-# 3. 启动桌面应用（PySide6 版）
-uv run python main_qt.py
+# 3. 命令行（import-media 等）
+uv run mdtool --help
 ```
 
 ### Typora 集成（自定义命令）
@@ -81,7 +81,7 @@ uv run python main_qt.py
 `scripts/build.py` 一键打包两个 exe（本地与 CI 共用同一逻辑）：
 
 ```powershell
-python scripts/build.py               # onefile，打包 MarkdownUtilQt.exe + typora-uploader.exe
+python scripts/build.py               # onefile，打包 MdTool.exe + typora-uploader.exe
 python scripts/build.py --onedir      # onedir 模式（启动快，目录形式）
 python scripts/build.py --skip-rust   # 只打包 Python 侧
 python scripts/build.py --skip-py     # 只打包 Rust 侧
@@ -91,7 +91,7 @@ python scripts/build.py --skip-py     # 只打包 Rust 侧
 
 ## 版本管理
 
-版本单一来源是**根目录 `pyproject.toml`**，`scripts/version.py` 负责同步到所有子项目（`markdown_util`、`libmarkdown`、`typora-uploader`）。
+版本单一来源是**根目录 `pyproject.toml`**，`scripts/version.py` 负责同步到所有子项目（`libmarkdown`、`typora-uploader`；mdtool 自身就在根 pyproject）。
 
 ```powershell
 python scripts/version.py current                # 打印当前版本
@@ -106,7 +106,7 @@ python scripts/version.py set 1.2.3              # 设置根版本并同步
 
 ## CI / CD
 
-- `.github/workflows/ci.yml`：main 分支 push / PR 触发 —— `markdown_util` 导入冒烟 + Qt boot 冒烟、`libmarkdown` pytest、`typora-uploader` cargo check。
+- `.github/workflows/ci.yml`：main 分支 push / PR 触发 —— `mdtool` 导入冒烟 + Qt boot 冒烟、`libmarkdown` pytest、`typora-uploader` cargo check。
 - `.github/workflows/release.yml`：`v*` tag 触发 —— 同步版本号 → `scripts/build.py` 打包两个 exe → 上传 artifact 并创建 GitHub Release。
 
 ## 应用配置位置

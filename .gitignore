@@ -4,8 +4,6 @@
 # 打包产物
 dist/
 build/
-markdown_util/build/
-markdown_util/dist/
 
 # Rust
 typora-uploader/target/
@@ -14,6 +12,9 @@ typora-uploader/target/
 .uv-cache/
 *.log
 
+# 开发态运行数据（媒体 meta db / 笔记 db）
+*.db
+
 # Android / IDE
 .gradle/
 local.properties
@@ -21,5 +22,3 @@ local.properties
 .idea/
 *.apk
 
-# uv 在仓库根目录误生成的锁文件（真正的在 markdown_util/ 内并已跟踪）
-uv.lock

@@ -39,12 +39,9 @@ def _setup_utf8_stdio() -> None:
         except Exception:
             pass
 
-# 子项目版本写入位置（文件, 字段名, 匹配正则）。正则里用 {ver} 占位。
+# 子项目版本写入位置（文件, 匹配正则）。正则里用 {ver} 占位。
+# 根 pyproject 自身就是 mdtool 包的项目文件，无需再同步一份。
 SUBPROJECTS = [
-    {
-        "file": ROOT / "markdown_util" / "pyproject.toml",
-        "pattern": re.compile(r'(^version\s*=\s*")([^"]+)(")', re.MULTILINE),
-    },
     {
         "file": ROOT / "libmarkdown" / "pyproject.toml",
         "pattern": re.compile(r'(^version\s*=\s*")([^"]+)(")', re.MULTILINE),
