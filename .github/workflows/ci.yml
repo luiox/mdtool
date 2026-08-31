@@ -30,9 +30,9 @@ jobs:
 
       - name: 导入冒烟测试（desktop + core 全部模块可导入）
         run: |
-          uv run python -c "import mdtool.desktop.qtui.main_window, mdtool.desktop.qtui.widgets, mdtool.desktop.qtui.icons, mdtool.desktop.qtui.workers, mdtool.desktop.qtui.theme, mdtool.desktop.qtui.logbus; import mdtool.desktop.qtui.tabs.library, mdtool.desktop.qtui.tabs.search, mdtool.desktop.qtui.tabs.media_server, mdtool.desktop.qtui.tabs.space_fix, mdtool.desktop.qtui.tabs.image_check, mdtool.desktop.qtui.tabs.migrate, mdtool.desktop.qtui.tabs.file_browser, mdtool.desktop.qtui.tabs.notes_browser; import mdtool.core.server.notes_db, mdtool.core.server.meta_db, mdtool.core.server.media_server, mdtool.core.utils, mdtool.core.link_resolver; print('imports OK')"
+          uv run python -c "import mdtool.desktop.qtui.main_window, mdtool.desktop.qtui.widgets, mdtool.desktop.qtui.icons, mdtool.desktop.qtui.workers, mdtool.desktop.qtui.theme, mdtool.desktop.qtui.logbus; import mdtool.desktop.qtui.tabs.library, mdtool.desktop.qtui.tabs.search, mdtool.desktop.qtui.tabs.blog, mdtool.desktop.qtui.tabs.media_server, mdtool.desktop.qtui.tabs.space_fix, mdtool.desktop.qtui.tabs.image_check, mdtool.desktop.qtui.tabs.migrate, mdtool.desktop.qtui.tabs.file_browser, mdtool.desktop.qtui.tabs.notes_browser; import mdtool.core.server.notes_db, mdtool.core.server.meta_db, mdtool.core.server.media_server, mdtool.core.utils, mdtool.core.link_resolver, mdtool.core.blog, mdtool.core.kb_bundle; print('imports OK')"
 
-      - name: 单元测试（link_resolver / zip 打包计划）
+      - name: 单元测试（link_resolver / zip 打包计划 / 博客源）
         run: |
           uv run python -m pytest -q
 
@@ -40,7 +40,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          uv run python -c "import sys; from PySide6.QtWidgets import QApplication; app=QApplication(sys.argv); from mdtool.desktop.qtui.theme import apply_theme; apply_theme(app,'light'); from mdtool.desktop.qtui.main_window import MainWindow; w=MainWindow(); assert w.stack.count()==7; from mdtool.desktop.qtui.icons import folder_icon, file_icon, tray_icon, nav_icon; folder_icon(); file_icon(); tray_icon(); [nav_icon(n) for n in ('notes','search','server','check','migrate','space','log')]; [t.shutdown() for t in w.all_tabs()]; print('boot OK')"
+          uv run python -c "import sys; from PySide6.QtWidgets import QApplication; app=QApplication(sys.argv); from mdtool.desktop.qtui.theme import apply_theme; apply_theme(app,'light'); from mdtool.desktop.qtui.main_window import MainWindow; w=MainWindow(); assert w.stack.count()==8; from mdtool.desktop.qtui.icons import folder_icon, file_icon, tray_icon, nav_icon; folder_icon(); file_icon(); tray_icon(); [nav_icon(n) for n in ('notes','search','blog','server','check','migrate','space','log')]; [t.shutdown() for t in w.all_tabs()]; print('boot OK')"
 
   libmarkdown-test:
     name: libmarkdown 单元测试

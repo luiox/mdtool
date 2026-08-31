@@ -43,6 +43,7 @@ NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("知识库", [
         ("library", "笔记库", "notes"),  # 散装目录 ⇄ db 容器共用一页（见 tabs/library.py）
         ("search", "搜索", "search"),    # 全文检索独立成页，不与目录树抢空间
+        ("blog", "博客", "blog"),        # Hexo 博客源（第三种知识库形态，见 tabs/blog.py）
     ]),
     ("工具", [
         ("media", "媒体服务器", "server"),
@@ -142,20 +143,24 @@ class MainWindow(QMainWindow):
         h.addWidget(self.page_title)
         h.addSpacing(20)
 
-        # 数据源：两个按钮即入口——散装选目录、db 选 .db 文件，选完即切；
-        # 当前在哪个源由窗口标题标注，散装根目录路径挂在按钮 tooltip 上
+        # 数据源：三个按钮即入口——散装选目录、db 选 .db 文件、博客选 Hexo
+        # 源目录，选完即切；当前在哪个源由窗口标题标注，散装根目录路径挂在按钮 tooltip 上
         self.src_fs = QPushButton("散装目录")
         self.src_fs.clicked.connect(self._on_src_fs_clicked)
         self.src_db = QPushButton("db 容器")
         self.src_db.clicked.connect(self.pick_db_file)
+        self.src_blog = QPushButton("博客源")
+        self.src_blog.clicked.connect(self._on_src_blog_clicked)
         h.addWidget(self.src_fs)
         h.addWidget(self.src_db)
+        h.addWidget(self.src_blog)
 
         h.addStretch(1)
         return bar
 
     def _build_pages(self):
-        """实例化六个页面并按侧边栏顺序入栈；类延迟导入防导入环。"""
+        """实例化七个页面并按侧边栏顺序入栈；类延迟导入防导入环。"""
+        from mdtool.desktop.qtui.tabs.blog import BlogPage
         from mdtool.desktop.qtui.tabs.image_check import ImageCheckTab
         from mdtool.desktop.qtui.tabs.library import LibraryPage
         from mdtool.desktop.qtui.tabs.media_server import MediaServerTab
@@ -166,6 +171,7 @@ class MainWindow(QMainWindow):
         classes = {
             "library": LibraryPage,
             "search": SearchPage,
+            "blog": BlogPage,
             "media": MediaServerTab,
             "check": ImageCheckTab,
             "migrate": MigrateTab,
@@ -188,8 +194,8 @@ class MainWindow(QMainWindow):
         index = len(self._nav_keys) - 1 if key == "log" else self._nav_keys.index(key)
         self.stack.setCurrentIndex(index)
         self.page_title.setText(PAGE_TITLES.get(key, "日志"))
-        # 数据源按钮只在笔记库相关页面有意义
-        visible = key in ("library", "search")
+        # 数据源按钮只在笔记库/博客相关页面有意义
+        visible = key in ("library", "search", "blog")
         for b in (self.src_fs, self.src_db):
             b.setVisible(visible)
         for k, e in self._pages.items():  # 手动互斥（不用 QButtonGroup 的自动 id）
@@ -208,6 +214,12 @@ class MainWindow(QMainWindow):
             return
         self.library_page._set_mode("fs")
         self.update_title()
+
+    def _on_src_blog_clicked(self):
+        """「博客源」按钮：选 Hexo 源根目录并切到博客页（目录是否博客源由页面提示）。"""
+        if self.select_root_dir() is None:
+            return
+        self.switch_page("blog")
 
     def pick_db_file(self):
         """「db 容器」按钮：与「散装目录」同语义——每次都弹选择框，

@@ -91,6 +91,11 @@ _NAV_SVGS: dict[str, str] = {
         '<circle cx="10.5" cy="10.5" r="6"/>'
         '<path d="M15 15l5.5 5.5"/>'
     ),
+    # 博客：笔
+    "blog": _line_icon(
+        '<path d="M4 20l1.2-4.2L16.5 4.5a2.12 2.12 0 0 1 3 3L8.2 18.8z"/>'
+        '<path d="M13.5 7.5l3 3"/>'
+    ),
 }
 
 _DEFAULT_PX = 16
