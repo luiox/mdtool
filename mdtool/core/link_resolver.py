@@ -26,6 +26,8 @@ _URL_RE = re.compile(
 _DEST_RE = re.compile(r"(?P<open>!?\[[^\]]*\])\((?P<dest>[^)\n]+)\)")
 # 本地相对路径 / 外部 URL 的判别：dest 含 scheme 视为外部
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+# 博客形态相对链接：assets/<name>（容忍 ./ 与 ../ 前缀；Hexo _posts 平铺）
+_HEXO_RE = re.compile(r"^(?:\.{1,2}/)*assets/(?P<name>[^/\s]+)$")
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,8 @@ def rewrite(
     target:
       - ``"desktop"``: 原样（Typora / 本地渲染）
       - ``"zip"``:     zip 内相对路径 ``images/<name>`` 或 ``assets/<name>``
+      - ``"hexo"``:    博客形态 ``assets/<name>``（图片附件统一平铺 source/assets/；
+                       仅桌面管理侧使用，手机端不消费博客形态，LinkResolver.kt 无此目标）
       - ``"phone"`` / ``"lan"``: ``<base>/images/<name>``（base 如 ``http://127.0.0.1:8080``）
     """
     ref = parse(url, host=host, port=port)
@@ -76,6 +80,8 @@ def rewrite(
         return url
     if target == "zip":
         return f"{ref.category}/{ref.name}"
+    if target == "hexo":
+        return f"assets/{ref.name}"
     if target in ("phone", "lan"):
         b = base.rstrip("/")
         if not b:
@@ -105,6 +111,21 @@ def iter_link_destinations(text: str) -> Iterator[tuple[int, int, str, bool]]:
 def is_external_url(dest: str) -> bool:
     """dest 是否外部 URL（带 scheme）或绝对路径；False = 可当相对路径解析。"""
     return bool(_SCHEME_RE.match(dest)) or dest.startswith("/")
+
+
+def parse_hexo_dest(dest: str) -> Optional[str]:
+    """识别博客形态相对链接 ``assets/<name>`` → name；其余返回 None。
+
+    博客源豁免（docs/博客文章管理规划.md §2）：Hexo 文章统一以
+    ``assets/<name>`` 引用 ``source/assets/`` 下的媒体。仅桌面管理侧使用，
+    不回渗到知识库默认模型（手机端 LinkResolver.kt 无此语义）。
+    """
+    if not dest:
+        return None
+    m = _HEXO_RE.match(dest.strip())
+    if not m:
+        return None
+    return m.group("name").split("?")[0].split("#")[0]
 
 
 def rewrite_markdown(

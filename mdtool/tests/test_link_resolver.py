@@ -10,6 +10,7 @@ from mdtool.core.link_resolver import (  # noqa: E402
     is_external_url,
     iter_link_destinations,
     parse,
+    parse_hexo_dest,
     rewrite,
     rewrite_markdown,
 )
@@ -83,6 +84,36 @@ def test_rewrite_unknown_passthrough():
 def test_rewrite_phone_requires_base():
     with pytest.raises(ValueError):
         rewrite(IMG, target="phone")
+
+
+# ── hexo 目标（博客形态豁免，docs/博客文章管理规划.md §2）──
+
+def test_rewrite_hexo():
+    # 图片与附件统一平铺 source/assets/，链接固定 assets/<name>
+    assert rewrite(IMG, target="hexo") == "assets/image-20201215174726729.png"
+    assert rewrite(AST, target="hexo") == "assets/20201215174726729.pdf"
+
+
+def test_rewrite_hexo_unknown_passthrough():
+    external = "https://example.com/images/a.png"
+    assert rewrite(external, target="hexo") == external
+
+
+def test_rewrite_markdown_hexo():
+    text = f"![图]({IMG})\n[文件]({AST})"
+    out = rewrite_markdown(text, target="hexo")
+    assert out == "![图](assets/image-20201215174726729.png)\n[文件](assets/20201215174726729.pdf)"
+
+
+def test_parse_hexo_dest():
+    assert parse_hexo_dest("assets/a.png") == "a.png"
+    assert parse_hexo_dest("./assets/a.png") == "a.png"
+    assert parse_hexo_dest("../assets/a.png") == "a.png"
+    assert parse_hexo_dest("assets/a.png?raw=1") == "a.png"
+    assert parse_hexo_dest("images/a.png") is None
+    assert parse_hexo_dest("assets/sub/a.png") is None
+    assert parse_hexo_dest("https://a.com/assets/a.png") is None
+    assert parse_hexo_dest("") is None
 
 
 # ── iter_link_destinations ──
