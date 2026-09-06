@@ -85,7 +85,7 @@ class SearchPage(BaseTab):
         """散装视图根 = 笔记树目录（markdown/ 优先双名兼容），与笔记库页一致。"""
         if not self.root_dir:
             return None
-        import kb_bundle as kbb
+        import mdtool.core.kb_bundle as kbb
         return kbb.resolve_notes_dir(self.root_dir)
 
     def _refresh_hint(self):
