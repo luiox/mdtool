@@ -312,14 +312,17 @@ def render_scaffold(template: str, *, title: str, date: str,
 def scaffold_post(root: Path, *, title: str, slug: str = "",
                   date: Optional[datetime] = None,
                   categories: tuple = (), tags: tuple = (),
-                  description: Optional[str] = None) -> Path:
-    """生成新文章到 ``source/_posts/``（B1），返回文件路径。
+                  description: Optional[str] = None,
+                  dest_dir: Optional[Path] = None) -> Path:
+    """生成新文章（B1），返回文件路径；同名文件已存在抛
+    :class:`FileExistsError`——绝不静默覆盖。
 
-    模板取 ``scaffolds/post.md``（缺省内置模板）；slug 缺省由标题清洗而来。
-    同名文件已存在抛 :class:`FileExistsError`——绝不静默覆盖。
+    hexo 形态写 ``root/source/_posts/``；KB 形态传 ``dest_dir`` 直写博客
+    目录（模板同样回退内置——笔记库没有 scaffolds/）。
     """
     d = date or datetime.now()
-    target = posts_dir(root) / sanitize_post_filename(slug.strip() or title)
+    target = (dest_dir or posts_dir(root)) / \
+        sanitize_post_filename(slug.strip() or title)
     if target.exists():
         raise FileExistsError(f"文章已存在: {target.name}")
     body = render_scaffold(

@@ -155,9 +155,20 @@ def main(argv: list[str] | None = None) -> int:
                           help="导入 assets/（附件）而非 images/（图片）")
     p_import.add_argument("--dry-run", action="store_true", help="只打印计划不落盘")
 
+    p_migrate = sub.add_parser(
+        "blog-migrate", help="hexo 博客仓一次性迁入笔记库博客目录（阶段 3；拒绝重跑）")
+    p_migrate.add_argument("--src", required=True, help="hexo 源仓根目录")
+    p_migrate.add_argument("--kb", required=True, help="笔记库根目录")
+    p_migrate.add_argument("--dir", default="blog",
+                           help="笔记树下博客目录名（默认 blog）")
+    p_migrate.add_argument("--dry-run", action="store_true", help="只打印计划不落盘")
+
     args = parser.parse_args(argv)
     if args.command == "import-media":
         return cmd_import_media(args.paths, args.kb_root, args.asset, args.dry_run)
+    if args.command == "blog-migrate":
+        from mdtool.cli.blog_migrate import cmd_blog_migrate
+        return cmd_blog_migrate(args.src, args.kb, args.dir, args.dry_run)
     parser.error(f"未知命令: {args.command}")
 
 

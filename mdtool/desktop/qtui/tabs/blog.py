@@ -1,10 +1,18 @@
-"""博客（Hexo）源页 —— 博客源作为与散装/db 并列的知识库形态（B0–B2）。
+"""博客源页 —— 双形态博客管理（hexo 源仓回退 + 笔记库 KB 形态）。
 
-识别含 ``_config.yml`` + ``source/_posts/`` 的目录；文章列表读 front-matter
-（标题/日期/分类/标签，草稿可过滤）；新建文章走 Hexo scaffold；图片闭环
-（导入图片入 source/assets → 链接上剪贴板；全库校验；散落媒体迁移改写）。
-纯逻辑在 :mod:`mdtool.core.blog`，本页只编排（plan_zip_bundle 同款分层）：
-长任务（校验/迁移计划/迁移执行）走 workers 线程池，不占界面线程。
+按顶栏选择的根目录自动分派：
+
+- **hexo 形态**（``_config.yml`` + ``source/_posts/``）：阶段 1–3 的既有
+  功能全保留——文章列表/新建/scaffold/图片闭环/校验/媒体迁移/npm 发布行/
+  sitegen（legacy 适配器直读 passage_index.json）。
+- **KB 形态**（kb.json 或 markdown/notes 笔记树）：文章活在笔记库任意
+  位置，勾选制发布——「选择发布文章」弹文件夹三态复选树（bundle_io
+  同款），勾选集写回 ``<博客目录>/manifest.json`` 的 selected 字段；博客
+  目录 B 还承载 site.json（站点配置）、assets/（文章媒体）、public-sitegen/
+  （产物）与部署克隆。生成/发布/预览与 hexo 形态共用按钮，内部分派。
+
+纯逻辑在 :mod:`mdtool.core.blog` 与 :mod:`mdtool.core.sitegen`，本页只编排：
+长任务走 workers 线程池，不占界面线程。
 """
 
 from __future__ import annotations
@@ -14,7 +22,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,14 +40,26 @@ from PySide6.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from mdtool.core import blog
+from mdtool.core.kb_bundle import resolve_notes_dir
 from mdtool.core.sitegen import deploy as sg_deploy
+from mdtool.core.sitegen import kb as sg_kb
 from mdtool.core.sitegen import legacy as sg_legacy
 from mdtool.core.sitegen import preview as sg_preview
 from mdtool.core.sitegen.generate import build_site
-from mdtool.desktop.qtui.tabs.file_browser import collect_media_config, open_external
+from mdtool.core.sitegen.manifest import (
+    apply_selection,
+    load_manifest,
+    save_manifest,
+)
+from mdtool.desktop.qtui.tabs.file_browser import (
+    collect_media_config,
+    list_md_tree,
+    open_external,
+)
 from mdtool.desktop.qtui.widgets import BaseTab, muted_label
 from mdtool.desktop.qtui.workers import start_worker
 
@@ -92,6 +112,37 @@ def _sitegen_deploy(blog_root: Path, report) -> list[tuple[str, int]]:
     return sg_deploy.run_git_deploy(plan, out_dir=out, report=report)
 
 
+# ── KB 形态（阶段 3）worker：输入来自 <博客目录>/manifest.json + site.json ──
+
+def _kb_build(kb_root: Path, blog_dir: Path, report) -> object:
+    manifest = load_manifest(sg_kb.manifest_path(blog_dir))
+    inputs, missing = sg_kb.manifest_post_inputs(kb_root, manifest)
+    for m in missing:
+        report("log", msg=f"[失联] {m}", level="WARN")
+    cfg = sg_kb.load_site_config(blog_dir)
+    report("log", msg=f"sitegen：{len(inputs)} 篇已勾选文章，开始生成…")
+    rpt = build_site(inputs, cfg.spec,
+                     assets_src=sg_kb.assets_dir(blog_dir),
+                     out_dir=blog_dir / _SITEGEN_OUT)
+    report("log", msg=f"生成完成：文章 {rpt.posts}，文件 {rpt.files}，"
+                      f"跳过 {len(rpt.skipped)}")
+    for s in rpt.skipped:
+        report("log", msg=f"[skip] {s}", level="WARN")
+    return rpt
+
+
+def _kb_deploy(kb_root: Path, blog_dir: Path, report) -> list[tuple[str, int]]:
+    cfg = sg_kb.load_site_config(blog_dir)
+    if not cfg.deploy_repo:
+        raise RuntimeError("site.json 未配置 deploy.repo，无法直推产物仓")
+    out = blog_dir / _SITEGEN_OUT
+    _kb_build(kb_root, blog_dir, report)
+    plan = sg_deploy.plan_git_deploy(
+        out_dir=out, repo_url=cfg.deploy_repo, branch=cfg.deploy_branch,
+        deploy_dir=blog_dir / _SITEGEN_DEPLOY_DIR)
+    return sg_deploy.run_git_deploy(plan, out_dir=out, report=report)
+
+
 def _hexo_job(root: Path, commands: list[str], report) -> list[tuple[str, int]]:
     """顺序执行 hexo 命令（worker 线程），stdout 逐行回传日志总线。
 
@@ -114,7 +165,15 @@ def _hexo_job(root: Path, commands: list[str], report) -> list[tuple[str, int]]:
     return done
 
 # 源码内不算问题的问题（validate_blog 已滤，这里仅兜底展示用）
-_HINT_NOT_SOURCE = "当前根目录不是 Hexo 博客源（需要 _config.yml 与 source/_posts/）"
+_HINT_NOT_SOURCE = "当前根目录不是博客源（hexo 形态需 _config.yml 与 source/_posts/；KB 形态需 kb.json 或 markdown/ 笔记树）"
+_HINT_PICK = "顶栏「博客源」选择根目录（hexo 源仓或笔记库均可）"
+
+
+def _is_kb_root(root) -> bool:
+    """KB 形态判定：kb.json（新规范）或 markdown/、notes/ 笔记树目录。"""
+    root = Path(root)
+    return (root / "kb.json").is_file() or (root / "markdown").is_dir() \
+        or (root / "notes").is_dir()
 
 
 def _join_meta(items, sep: str = "/") -> str:
@@ -150,24 +209,33 @@ class BlogPage(BaseTab):
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 0, 18, 14)
 
-        self.hint = muted_label("顶栏「博客源」选择博客根目录"
-                                "（需含 _config.yml 与 source/_posts/）")
-        root.addWidget(self.hint)
+        hint_bar = QHBoxLayout()
+        self.hint = muted_label(_HINT_PICK)
+        hint_bar.addWidget(self.hint, 1)
+        self.btn_blog_dir = QPushButton("更改博客目录…")
+        self.btn_blog_dir.clicked.connect(self.change_blog_dir)
+        hint_bar.addWidget(self.btn_blog_dir)
+        root.addLayout(hint_bar)
 
         bar = QHBoxLayout()
         btn_new = QPushButton("新建文章…")
         btn_new.setProperty("variant", "primary")
         btn_new.clicked.connect(self.new_post)
-        btn_kb = QPushButton("从笔记库导入…")
-        btn_kb.clicked.connect(self.import_from_kb)
+        self.btn_kb_import = QPushButton("从笔记库导入…")
+        self.btn_kb_import.clicked.connect(self.import_from_kb)
         btn_img = QPushButton("导入图片…")
         btn_img.clicked.connect(self.import_images)
-        btn_check = QPushButton("校验全库")
-        btn_check.clicked.connect(self.validate_all)
-        btn_mig = QPushButton("迁移散落媒体…")
-        btn_mig.clicked.connect(self.migrate_media)
-        self._busy_btns = (btn_check, btn_mig, btn_kb)
-        for b in (btn_new, btn_kb, btn_img, btn_check, btn_mig):
+        self.btn_check = QPushButton("校验全库")
+        self.btn_check.clicked.connect(self.validate_all)
+        self.btn_mig = QPushButton("迁移散落媒体…")
+        self.btn_mig.clicked.connect(self.migrate_media)
+        self.btn_select = QPushButton("选择发布文章…")
+        self.btn_select.setProperty("variant", "primary")
+        self.btn_select.clicked.connect(self.select_publish)
+        self._busy_btns = (self.btn_check, self.btn_mig, self.btn_kb_import,
+                           self.btn_select)
+        for b in (btn_new, self.btn_kb_import, btn_img, self.btn_check,
+                  self.btn_mig, self.btn_select):
             bar.addWidget(b)
         bar.addStretch(1)
         self.drafts = QCheckBox("含草稿")
@@ -179,7 +247,10 @@ class BlogPage(BaseTab):
         bar.addWidget(refresh)
         root.addLayout(bar)
 
-        pub = QHBoxLayout()
+        # hexo 发布行：仅 hexo 形态可见（KB 形态由 sitegen 行承担全部发布）
+        self.hexo_row = QWidget()
+        pub = QHBoxLayout(self.hexo_row)
+        pub.setContentsMargins(0, 0, 0, 0)
         btn_pub = QPushButton("一键发布")
         btn_pub.setProperty("variant", "primary")
         btn_pub.clicked.connect(self.publish)
@@ -193,7 +264,7 @@ class BlogPage(BaseTab):
         pub.addStretch(1)
         pub.addWidget(muted_label("发布 = hexo generate + deploy（输出见日志页）；"
                                   "预览 = hexo server，独立控制台"))
-        root.addLayout(pub)
+        root.addWidget(self.hexo_row)
 
         sg = QHBoxLayout()
         btn_sg_gen = QPushButton("生成站点（sitegen）")
@@ -207,8 +278,9 @@ class BlogPage(BaseTab):
         for b in (btn_sg_gen, btn_sg_pub, btn_sg_prev):
             sg.addWidget(b)
         sg.addStretch(1)
-        sg.addWidget(muted_label("sitegen = 自研生成器：生成到 public-sitegen/，"
-                                 "发布 = 生成 + git 直推产物仓（hexo 通道保留作回退）"))
+        self.sg_hint = muted_label("sitegen = 自研生成器：生成到 public-sitegen/，"
+                                   "发布 = 生成 + git 直推产物仓（hexo 通道保留作回退）")
+        sg.addWidget(self.sg_hint)
         root.addLayout(sg)
 
         split = QSplitter(Qt.Orientation.Vertical)
@@ -236,35 +308,124 @@ class BlogPage(BaseTab):
         super().set_root_dir(root_dir)
         self._reload()
 
+    def _mode(self) -> str:
+        """根目录形态分派：hexo 源仓 / KB（笔记库博客） / none。"""
+        if not self.root_dir:
+            return "none"
+        if blog.is_hexo_source(self.root_dir):
+            return "hexo"
+        return "kb" if _is_kb_root(self.root_dir) else "none"
+
+    def _kb_notes_root(self) -> Path:
+        return resolve_notes_dir(Path(self.root_dir))
+
+    def _blog_dir(self) -> Path:
+        """博客工作目录 B：QSettings 记忆 > 默认 <notes>/blog > 唯一带清单的
+        一级子目录（迁移产物探测）。清单/配置/媒体/产物都聚在 B 内。"""
+        root = Path(self.root_dir)
+        notes = self._kb_notes_root()
+        saved = QSettings("mdtool", "blog").value(
+            f"blogdir/{root.as_posix()}", "", str)
+        if saved:
+            return Path(saved)
+        default = notes / "blog"
+        if default.is_dir():
+            return default
+        if notes.is_dir():
+            candidates = [d for d in notes.iterdir()
+                          if d.is_dir() and (d / "manifest.json").is_file()]
+            if len(candidates) == 1:
+                return candidates[0]
+        return default
+
+    def change_blog_dir(self):
+        start = self._blog_dir() if self.root_dir else Path.home()
+        chosen = QFileDialog.getExistingDirectory(self, "选择博客目录", str(start))
+        if not chosen:
+            return
+        QSettings("mdtool", "blog").setValue(
+            f"blogdir/{Path(self.root_dir).as_posix()}", Path(chosen).as_posix())
+        self._reload()
+
     def _source_ok(self) -> bool:
-        return bool(self.root_dir) and blog.is_hexo_source(self.root_dir)
+        """sitegen 按钮可用性：hexo 源仓，或 KB 形态（博客目录可解析）。"""
+        mode = self._mode()
+        if mode == "hexo":
+            return True
+        return mode == "kb" and bool(self.root_dir)
 
     def _require_source(self) -> bool:
-        if not self._source_ok():
-            QMessageBox.warning(self, "提示", f"请先选择博客源目录。{_HINT_NOT_SOURCE}")
-            return False
-        return True
+        mode = self._mode()
+        if mode == "hexo":
+            return True
+        if mode == "kb":
+            return self._require_kb()
+        QMessageBox.warning(self, "提示", f"请先选择博客源目录。{_HINT_NOT_SOURCE}")
+        return False
+
+    def _require_kb(self) -> tuple[Path, Path] | None:
+        """KB 形态前置校验，返回 (kb_root, 博客目录 B)；不满足弹提示。"""
+        if self._mode() != "kb":
+            QMessageBox.warning(self, "提示", _HINT_NOT_SOURCE)
+            return None
+        blog_dir = self._blog_dir()
+        if not sg_kb.manifest_path(blog_dir).is_file():
+            QMessageBox.warning(
+                self, "提示",
+                f"博客目录 {blog_dir} 下没有 manifest.json。\n"
+                "先运行迁移（mdtool blog-migrate）或勾选文章发布。")
+            return None
+        return Path(self.root_dir), blog_dir
 
     def _reload(self):
         self.table.clear()
         self.issues.clear()
-        if not self._source_ok():
-            self.hint.setText(_HINT_NOT_SOURCE if self.root_dir
-                              else "顶栏「博客源」选择博客根目录"
-                                   "（需含 _config.yml 与 source/_posts/）")
+        mode = self._mode()
+        self.hexo_row.setVisible(mode == "hexo")
+        self.btn_blog_dir.setVisible(mode == "kb")
+        self.btn_select.setVisible(mode == "kb")
+        self.btn_kb_import.setVisible(mode == "hexo")
+        self.btn_check.setVisible(mode == "hexo")
+        self.btn_mig.setVisible(mode == "hexo")
+        self.drafts.setVisible(mode == "hexo")
+        if mode == "none":
+            self.hint.setText(_HINT_NOT_SOURCE if self.root_dir else _HINT_PICK)
             return
-        self.hint.setText(f"博客源：{self.root_dir}")
-        for info in blog.list_posts(self.root_dir,
-                                    include_drafts=self.drafts.isChecked()):
-            title = ("[草稿] " if info.draft else "") + info.title
+        if mode == "hexo":
+            self.hint.setText(f"hexo 博客源：{self.root_dir}")
+            self.sg_hint.setText("sitegen：生成到 public-sitegen/，"
+                                 "发布 = 生成 + git 直推产物仓（hexo 通道保留作回退）")
+            for info in blog.list_posts(self.root_dir,
+                                        include_drafts=self.drafts.isChecked()):
+                title = ("[草稿] " if info.draft else "") + info.title
+                item = QTreeWidgetItem([
+                    title,
+                    info.date.strftime("%Y-%m-%d %H:%M") if info.date else "",
+                    _join_meta(info.categories),
+                    _join_meta(info.tags, sep=" "),
+                    info.rel,
+                ])
+                item.setData(0, Qt.ItemDataRole.UserRole, info.path)
+                self.table.addTopLevelItem(item)
+            return
+        # KB 形态：文章 = manifest 勾选条目（含未勾选，标注展示）
+        blog_dir = self._blog_dir()
+        self.hint.setText(f"笔记库：{self.root_dir} ｜ 博客目录：{blog_dir}")
+        self.sg_hint.setText("sitegen：生成到博客目录 public-sitegen/，"
+                             "发布 = 生成 + git 直推产物仓；勾选决定发布哪些文章")
+        manifest = load_manifest(sg_kb.manifest_path(blog_dir))
+        for e in sorted(manifest.entries, key=lambda e: e.id, reverse=True):
+            path = Path(self.root_dir) / e.note
+            info = blog.read_post_info(path, source_root=self.root_dir)
+            title = ("" if e.selected else "[未选] ") + info.title
             item = QTreeWidgetItem([
                 title,
                 info.date.strftime("%Y-%m-%d %H:%M") if info.date else "",
                 _join_meta(info.categories),
                 _join_meta(info.tags, sep=" "),
-                info.rel,
+                e.note,
             ])
-            item.setData(0, Qt.ItemDataRole.UserRole, info.path)
+            item.setData(0, Qt.ItemDataRole.UserRole, path)
             self.table.addTopLevelItem(item)
 
     def _open_item(self, item):
@@ -318,13 +479,17 @@ class BlogPage(BaseTab):
         if not title:
             QMessageBox.warning(self, "提示", "标题不能为空")
             return
+        kwargs = dict(title=title, slug=slug_edit.text().strip(),
+                      date=date_edit.dateTime().toPython(),
+                      categories=_parse_meta(cat_edit.text()),
+                      tags=_parse_meta(tag_edit.text()),
+                      description=desc_edit.text().strip() or None)
         try:
-            path = blog.scaffold_post(
-                self.root_dir, title=title, slug=slug_edit.text().strip(),
-                date=date_edit.dateTime().toPython(),
-                categories=_parse_meta(cat_edit.text()),
-                tags=_parse_meta(tag_edit.text()),
-                description=desc_edit.text().strip() or None)
+            if self._mode() == "kb":
+                path = blog.scaffold_post(self.root_dir, dest_dir=self._blog_dir(),
+                                          **kwargs)
+            else:
+                path = blog.scaffold_post(self.root_dir, **kwargs)
         except FileExistsError as e:
             QMessageBox.warning(self, "提示", str(e))
             return
@@ -345,15 +510,18 @@ class BlogPage(BaseTab):
             "", "图片 (*.png *.jpg *.jpeg *.gif *.bmp *.webp *.svg);;所有文件 (*.*)")
         if not files:
             return
+        if self._mode() == "kb":
+            target = sg_kb.assets_dir(self._blog_dir())
+        else:
+            target = blog.assets_dir(self.root_dir)
         try:
-            pairs = blog.import_images([Path(f) for f in files],
-                                       blog.assets_dir(self.root_dir))
+            pairs = blog.import_images([Path(f) for f in files], target)
         except OSError as e:
             QMessageBox.critical(self, "导入失败", str(e))
             return
         md = blog.links_markdown(pairs)
         QApplication.clipboard().setText(md)
-        self.log(f"已导入 {len(pairs)} 个媒体入 source/assets，"
+        self.log(f"已导入 {len(pairs)} 个媒体入 {target.name}，"
                  f"Markdown 链接已复制到剪贴板: {md}")
 
     # ── 从笔记库导入 ──
@@ -443,19 +611,27 @@ class BlogPage(BaseTab):
             on_error=self._on_worker_error,
         )
 
-    # ── sitegen 行（自研生成器，阶段 2）──
+    # ── sitegen 行（自研生成器；hexo/KB 双形态分派）──
 
     def generate_site(self):
         """sitegen 整站生成到 public-sitegen/（不动 hexo 的 public/）。"""
         if not self._require_source():
             return
         self._set_busy(True)
-        start_worker(
-            _sitegen_build, self.root_dir,
-            on_log=self.log,
-            on_finished=self._on_sitegen_done,
-            on_error=self._on_worker_error,
-        )
+        if self._mode() == "kb":
+            start_worker(
+                _kb_build, Path(self.root_dir), self._blog_dir(),
+                on_log=self.log,
+                on_finished=self._on_sitegen_done,
+                on_error=self._on_worker_error,
+            )
+        else:
+            start_worker(
+                _sitegen_build, self.root_dir,
+                on_log=self.log,
+                on_finished=self._on_sitegen_done,
+                on_error=self._on_worker_error,
+            )
 
     def _on_sitegen_done(self, rpt):
         self._set_busy(False)
@@ -465,10 +641,16 @@ class BlogPage(BaseTab):
         """sitegen 发布 = 生成 + git 直推产物仓（无需 node/hexo）。"""
         if not self._require_source():
             return
-        repo, branch = sg_legacy.load_legacy_deploy(self.root_dir)
+        if self._mode() == "kb":
+            cfg = sg_kb.load_site_config(self._blog_dir())
+            repo, branch = cfg.deploy_repo, cfg.deploy_branch
+            where = "site.json"
+        else:
+            repo, branch = sg_legacy.load_legacy_deploy(self.root_dir)
+            where = "_config.yml"
         if not repo:
             QMessageBox.warning(self, "提示",
-                                "博客源 _config.yml 未配置 deploy.repo，无法直推产物仓")
+                                f"{where} 未配置 deploy.repo，无法直推产物仓")
             return
         if QMessageBox.question(
                 self, "sitegen 发布",
@@ -477,12 +659,20 @@ class BlogPage(BaseTab):
                 ) != QMessageBox.StandardButton.Yes:
             return
         self._set_busy(True)
-        start_worker(
-            _sitegen_deploy, self.root_dir,
-            on_log=self.log,
-            on_finished=self._on_sitegen_published,
-            on_error=self._on_worker_error,
-        )
+        if self._mode() == "kb":
+            start_worker(
+                _kb_deploy, Path(self.root_dir), self._blog_dir(),
+                on_log=self.log,
+                on_finished=self._on_sitegen_published,
+                on_error=self._on_worker_error,
+            )
+        else:
+            start_worker(
+                _sitegen_deploy, self.root_dir,
+                on_log=self.log,
+                on_finished=self._on_sitegen_published,
+                on_error=self._on_worker_error,
+            )
 
     def _on_sitegen_published(self, done):
         self._set_busy(False)
@@ -492,17 +682,30 @@ class BlogPage(BaseTab):
         """预览 sitegen 产物：未生成就先生成，然后起内置服务器并开浏览器。"""
         if not self._require_source():
             return
-        out = self.root_dir / _SITEGEN_OUT
+        out = self._sitegen_out_dir()
         if not (out / "index.html").is_file():
             self._set_busy(True)
-            start_worker(
-                _sitegen_build, self.root_dir,
-                on_log=self.log,
-                on_finished=self._on_preview_build_done,
-                on_error=self._on_worker_error,
-            )
+            if self._mode() == "kb":
+                start_worker(
+                    _kb_build, Path(self.root_dir), self._blog_dir(),
+                    on_log=self.log,
+                    on_finished=self._on_preview_build_done,
+                    on_error=self._on_worker_error,
+                )
+            else:
+                start_worker(
+                    _sitegen_build, self.root_dir,
+                    on_log=self.log,
+                    on_finished=self._on_preview_build_done,
+                    on_error=self._on_worker_error,
+                )
             return
         self._open_preview()
+
+    def _sitegen_out_dir(self) -> Path:
+        if self._mode() == "kb":
+            return self._blog_dir() / _SITEGEN_OUT
+        return self.root_dir / _SITEGEN_OUT
 
     def _on_preview_build_done(self, rpt):
         self._set_busy(False)
@@ -512,10 +715,29 @@ class BlogPage(BaseTab):
     def _open_preview(self):
         """内置预览服务器幂等启动（端口内核分配），开浏览器。"""
         if self._preview is None or not self._preview.running:
-            self._preview = sg_preview.SitePreview(self.root_dir / _SITEGEN_OUT)
+            self._preview = sg_preview.SitePreview(self._sitegen_out_dir())
             self._preview.start()
             self.log(f"站点预览已启动: {self._preview.url}（随应用退出停止）")
         open_external(self._preview.url)
+
+    # ── KB 形态：勾选发布 ──
+
+    def select_publish(self):
+        """复选树勾选发布文章；确认即 apply_selection 落盘并刷新列表。"""
+        if self._mode() != "kb":
+            return
+        blog_dir = self._blog_dir()
+        manifest = load_manifest(sg_kb.manifest_path(blog_dir))
+        dlg = PublishSelectDialog(Path(self.root_dir), manifest, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        checked = dlg.checked_notes()
+        new_manifest, _mapping = apply_selection(
+            manifest, checked, published=datetime.now().strftime("%Y-%m-%d"))
+        save_manifest(sg_kb.manifest_path(blog_dir), new_manifest)
+        self.log(f"发布勾选已保存：{len(checked)} 篇（清单共 "
+                 f"{len(new_manifest.entries)} 条，id 只增不减）")
+        self._reload()
 
     # ── B2 校验 ──
 
@@ -602,3 +824,156 @@ class BlogPage(BaseTab):
     def _on_worker_error(self, msg: str):
         self._set_busy(False)
         self.log(f"博客任务失败: {msg}", "ERROR")
+
+
+class PublishSelectDialog(QDialog):
+    """发布勾选树（KB 形态）：文件夹三态复选，勾选集 = 要发布的文章。
+
+    勾选事实单点在 manifest.selected：对话框打开时从清单恢复勾选，确认后
+    由调用方 apply_selection 落盘——id 只增不减，取消勾选不回收映射。
+    """
+
+    def __init__(self, kb_root: Path, manifest, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择要发布的文章")
+        self.resize(600, 680)
+        self._updating = False
+        self._selected = {e.note for e in manifest.entries if e.selected}
+
+        layout = QVBoxLayout(self)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["笔记", "路径"])
+        self.tree.header().setStretchLastSection(True)
+        self.tree.setColumnWidth(0, 240)
+        layout.addWidget(self.tree, 1)
+
+        btn_row = QHBoxLayout()
+        btn_all = QPushButton("全选")
+        btn_all.clicked.connect(lambda: self._set_all(Qt.CheckState.Checked))
+        btn_none = QPushButton("清空")
+        btn_none.clicked.connect(lambda: self._set_all(Qt.CheckState.Unchecked))
+        btn_row.addWidget(btn_all)
+        btn_row.addWidget(btn_none)
+        btn_row.addStretch(1)
+        self.stats = muted_label("")
+        btn_row.addWidget(self.stats)
+        layout.addLayout(btn_row)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self._build_tree(kb_root)
+        self.tree.itemChanged.connect(self._on_item_changed)
+        self._refresh_stats()
+
+    def _build_tree(self, kb_root: Path):
+        folders: dict[str, QTreeWidgetItem] = {}
+
+        def folder_item(parts: tuple[str, ...]) -> QTreeWidgetItem:
+            key = "/".join(parts)
+            if key in folders:
+                return folders[key]
+            parent = folder_item(parts[:-1]) if len(parts) > 1 \
+                else self.tree.invisibleRootItem()
+            item = QTreeWidgetItem([parts[-1], ""])
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled
+                          | Qt.ItemFlag.ItemIsUserCheckable
+                          | Qt.ItemFlag.ItemIsAutoTristate)
+            item.setCheckState(0, Qt.CheckState.Unchecked)
+            parent.addChild(item)
+            folders[key] = item
+            return item
+
+        for rel, _path in list_md_tree(kb_root):
+            parts = tuple(rel.split("/"))
+            parent = folder_item(parts[:-1]) if len(parts) > 1 \
+                else self.tree.invisibleRootItem()
+            item = QTreeWidgetItem([parts[-1], rel])
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled
+                          | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setData(0, Qt.ItemDataRole.UserRole, rel)
+            item.setCheckState(
+                0, Qt.CheckState.Checked if rel in self._selected
+                else Qt.CheckState.Unchecked)
+            parent.addChild(item)
+        self._recompute_parents()
+
+    def _leaves(self):
+        def walk(item):
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child.childCount():
+                    yield from walk(child)
+                else:
+                    yield child
+        yield from walk(self.tree.invisibleRootItem())
+
+    def _recompute_parents(self):
+        """程序化设叶子勾选不自动上卷，父级三态手动重算（bundle_io 同款）。"""
+        self._updating = True
+        try:
+            def fix(item) -> tuple[int, int]:
+                checked = total = 0
+                for i in range(item.childCount()):
+                    child = item.child(i)
+                    if child.childCount():
+                        c, t = fix(child)
+                        state = (Qt.CheckState.Checked if c == t
+                                 else Qt.CheckState.Unchecked if c == 0
+                                 else Qt.CheckState.PartiallyChecked)
+                        child.setCheckState(0, state)
+                    elif child.checkState(0) == Qt.CheckState.Checked:
+                        c, t = 1, 1
+                    else:
+                        c, t = 0, 1
+                    checked += c
+                    total += t
+                return checked, total
+            fix(self.tree.invisibleRootItem())
+        finally:
+            self._updating = False
+
+    def _on_item_changed(self, item, _col):
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            if item.childCount():  # 文件夹勾选 → 传播到全部子孙叶子
+                state = item.checkState(0)
+
+                def spread(it):
+                    for i in range(it.childCount()):
+                        child = it.child(i)
+                        if child.childCount():
+                            spread(child)
+                        else:
+                            child.setCheckState(0, state)
+                spread(item)
+        finally:
+            self._updating = False
+        self._recompute_parents()
+        self._refresh_stats()
+
+    def _set_all(self, state: Qt.CheckState):
+        self._updating = True
+        try:
+            for leaf in self._leaves():
+                leaf.setCheckState(0, state)
+        finally:
+            self._updating = False
+        self._recompute_parents()
+        self._refresh_stats()
+
+    def _refresh_stats(self):
+        leaves = list(self._leaves())
+        n = sum(1 for leaf in leaves
+                if leaf.checkState(0) == Qt.CheckState.Checked)
+        self.stats.setText(f"已选 {n} / {len(leaves)} 篇")
+
+    def checked_notes(self) -> list[str]:
+        return sorted(leaf.data(0, Qt.ItemDataRole.UserRole)
+                      for leaf in self._leaves()
+                      if leaf.checkState(0) == Qt.CheckState.Checked)
