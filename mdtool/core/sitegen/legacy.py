@@ -76,6 +76,32 @@ def legacy_assets_dir(blog_root: Path) -> Path:
     return Path(blog_root) / "source" / "assets"
 
 
+def load_legacy_deploy(blog_root: Path) -> tuple[str, str]:
+    """``_config.yml`` 的 ``deploy:`` 块 → ``(repo_url, branch)``。
+
+    deploy 块的判定：顶层 ``deploy:`` 行之后、下一个顶层键之前的缩进行。
+    缺省分支 main（GitHub Pages 产物仓形态）；repo 为空表示源仓没配部署，
+    调用方应拒绝部署而不是猜目标。
+    """
+    repo, branch = "", "main"
+    in_deploy = False
+    for line in _read(Path(blog_root) / _CONFIG_NAME).splitlines():
+        if re.match(r"^deploy:\s*(#.*)?$", line):
+            in_deploy = True
+            continue
+        if not in_deploy:
+            continue
+        if re.match(r"^\S", line):  # 下一个顶层键：deploy 块结束
+            break
+        m = re.match(r"^\s+repo:\s*(.+?)\s*$", line)
+        if m:
+            repo = m.group(1).strip().strip("'\"")
+        m = re.match(r"^\s+branch:\s*(.+?)\s*$", line)
+        if m:
+            branch = m.group(1).strip().strip("'\"") or branch
+    return repo, branch
+
+
 def _read(p: Path) -> str:
     try:
         return p.read_text(encoding="utf-8")

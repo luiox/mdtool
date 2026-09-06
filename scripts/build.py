@@ -81,6 +81,8 @@ hiddenimports = [
     'mdtool.core.sitegen.render',
     'mdtool.core.sitegen.generate',
     'mdtool.core.sitegen.legacy',
+    'mdtool.core.sitegen.deploy',
+    'mdtool.core.sitegen.preview',
     # desktop（Qt 界面层）
     'mdtool.desktop.qtui',
     'mdtool.desktop.qtui.widgets',
