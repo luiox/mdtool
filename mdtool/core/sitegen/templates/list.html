@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} | {{ spec.title }}{% endblock %}
+{% block content %}
+<h1 class="page-heading">{{ heading }}</h1>
+<ul class="archive-list">
+  {% for p in posts %}
+  <li><time>{{ p.date_display }}</time><a href="/{{ p.url_path }}">{{ p.title }}</a></li>
+  {% endfor %}
+</ul>
+{% endblock %}

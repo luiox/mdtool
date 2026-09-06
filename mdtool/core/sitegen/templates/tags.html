@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}标签 | {{ spec.title }}{% endblock %}
+{% block content %}
+<h1 class="page-heading">标签</h1>
+<div class="tag-cloud">
+  {% for name, count in tag_counts %}
+  <a class="tag-pill" href="{{ coll_url('tags', name) }}">{{ name }}<sup>{{ count }}</sup></a>
+  {% endfor %}
+</div>
+{% endblock %}

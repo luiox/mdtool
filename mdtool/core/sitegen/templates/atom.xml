@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>{{ spec.title }}</title>
+  <link href="{{ abs_url('/atom.xml') }}" rel="self"/>
+  <link href="{{ spec.url }}/"/>
+  <id>{{ spec.url }}/</id>
+  <updated>{{ updated_iso }}</updated>
+  {% for p in posts %}
+  <entry>
+    <title>{{ p.title }}</title>
+    <link href="{{ abs_url('/' + p.url_path) }}"/>
+    <id>{{ abs_url('/' + p.url_path) }}</id>
+    <updated>{{ p.date_iso }}</updated>
+    <content type="html">{{ p.html }}</content>
+  </entry>
+  {% endfor %}
+</feed>
