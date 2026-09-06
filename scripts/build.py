@@ -61,6 +61,12 @@ _root = os.path.join(SPECPATH, os.pardir)
 _root_pyproject = os.path.join(_root, 'pyproject.toml')
 if os.path.exists(_root_pyproject):
     datas.append((_root_pyproject, '.'))
+# sitegen 的模板/静态资源是包内数据目录，Analysis 不自动携带，显式打入
+# （目录定位走 mdtool.core.sitegen.resource_dir，frozen 态从解包目录读）
+for _d in ('templates', 'static'):
+    _sg = os.path.join(_root, 'mdtool', 'core', 'sitegen', _d)
+    if os.path.isdir(_sg):
+        datas.append((_sg, os.path.join('mdtool', 'core', 'sitegen', _d)))
 binaries = []
 hiddenimports = [
     # core（后端）
@@ -70,6 +76,11 @@ hiddenimports = [
     'mdtool.core.utils',
     'mdtool.core.link_resolver',
     'mdtool.core.kb_bundle',
+    'mdtool.core.sitegen',
+    'mdtool.core.sitegen.manifest',
+    'mdtool.core.sitegen.render',
+    'mdtool.core.sitegen.generate',
+    'mdtool.core.sitegen.legacy',
     # desktop（Qt 界面层）
     'mdtool.desktop.qtui',
     'mdtool.desktop.qtui.widgets',

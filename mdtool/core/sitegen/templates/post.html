@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ post.title }} | {{ spec.title }}{% endblock %}
+{% block head %}
+<meta name="author" content="{{ spec.author }}">
+{% if post.description %}
+<meta name="description" content="{{ post.description }}">
+{% endif %}
+<meta property="og:type" content="article">
+<meta property="og:title" content="{{ post.title }}">
+<meta property="og:url" content="{{ abs_url('/' + post.url_path) }}">
+<meta property="og:site_name" content="{{ spec.title }}">
+{% if post.description %}
+<meta property="og:description" content="{{ post.description }}">
+{% endif %}
+{% if post.date_iso %}
+<meta property="article:published_time" content="{{ post.date_iso }}">
+{% endif %}
+{% for t in post.tags %}
+<meta property="article:tag" content="{{ t }}">
+{% endfor %}
+{% endblock %}
+{% block main_class %}{% endblock %}
+{% block content %}
+<article class="post">
+  <header class="post-header">
+    <h1 class="post-title">{{ post.title }}</h1>
+    <div class="post-meta">
+      {% if post.date_display %}<time>{{ post.date_display }}</time>{% endif %}
+      {% if post.categories_display %}<span class="dot">·</span><span>{{ post.categories_display }}</span>{% endif %}
+    </div>
+  </header>
+  <div class="post-content">
+    {% if post.toc %}
+    <aside class="toc-article">
+      <strong class="toc-title">目录</strong>
+      <ul>
+        {% for h in post.toc %}
+        <li class="toc-l{{ h.level }}"><a href="#{{ h.anchor }}">{{ h.num }} {{ h.text }}</a></li>
+        {% endfor %}
+      </ul>
+    </aside>
+    {% endif %}
+    {{ post.html | safe }}
+  </div>
+  {% if post.tags %}
+  <footer class="post-footer">
+    {% for t in post.tags %}<a class="tag-pill" href="{{ coll_url('tags', t) }}">{{ t }}</a>{% endfor %}
+  </footer>
+  {% endif %}
+</article>
+{% if newer or older %}
+<nav class="post-neighbors">
+  {% if newer %}<a class="neighbor" href="/{{ newer.url_path }}"><span class="neighbor-label">较新</span><span>{{ newer.title }}</span></a>{% endif %}
+  {% if older %}<a class="neighbor neighbor-right" href="/{{ older.url_path }}"><span class="neighbor-label">较早</span><span>{{ older.title }}</span></a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="post-list">
+  {% for p in posts %}
+  <article class="post-card">
+    <h2 class="card-title"><a href="/{{ p.url_path }}">{{ p.title }}</a></h2>
+    <div class="post-meta">
+      {% if p.date_display %}<time>{{ p.date_display }}</time>{% endif %}
+      {% if p.tags %}<span class="dot">·</span>{% for t in p.tags %}<a class="tag-pill tag-mini" href="{{ coll_url('tags', t) }}">{{ t }}</a>{% endfor %}{% endif %}
+    </div>
+    {% if p.excerpt %}<p class="card-excerpt">{{ p.excerpt }}</p>{% endif %}
+  </article>
+  {% endfor %}
+</div>
+{% if total_pages > 1 %}
+<nav class="pagination">
+  {% if page_no > 1 %}<a class="page-btn" href="{{ page_url(page_no - 1) }}">← 上一页</a>{% endif %}
+  <span class="page-indicator">{{ page_no }} / {{ total_pages }}</span>
+  {% if page_no < total_pages %}<a class="page-btn" href="{{ page_url(page_no + 1) }}">下一页 →</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

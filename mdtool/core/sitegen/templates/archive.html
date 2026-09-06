@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}归档 | {{ spec.title }}{% endblock %}
+{% block content %}
+<h1 class="page-heading">归档</h1>
+{% for year, year_posts in years %}
+<section class="archive-section">
+  <h2 class="year-label">{{ year }}</h2>
+  <ul class="archive-list">
+    {% for p in year_posts %}
+    <li><time>{{ p.date_display }}</time><a href="/{{ p.url_path }}">{{ p.title }}</a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
+{% endblock %}

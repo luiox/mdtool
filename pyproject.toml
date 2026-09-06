@@ -5,6 +5,10 @@ description = "Markdown 笔记工具集（monorepo：mdtool 桌面+CLI + libmark
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "jinja2>=3.1.6",
+    "markdown-it-py>=4.2.0",
+    "mdit-py-plugins>=0.6.1",
+    "pygments>=2.21.0",
     "pyside6>=6.11.1",
     "watchdog>=4.0",
 ]
