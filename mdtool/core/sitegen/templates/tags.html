@@ -1,10 +1,22 @@
+{# 标签云页：jacman tags 页形态——左 .archive-title 卡放全部标签（名称+篇数），
+   右侧留白占位。 #}
 {% extends "base.html" %}
 {% block title %}标签 | {{ spec.title }}{% endblock %}
-{% block content %}
-<h1 class="page-heading">标签</h1>
-<div class="tag-cloud">
-  {% for name, count in tag_counts %}
-  <a class="tag-pill" href="{{ coll_url('tags', name) }}">{{ name }}<sup>{{ count }}</sup></a>
-  {% endfor %}
+{% block wrapper %}
+<div class="archive-wrap">
+  <aside class="archive-title">
+    <h2 class="archive-heading">
+      <svg class="archive-glyph" viewBox="0 0 16 16" aria-hidden="true"><path
+        fill="currentColor" fill-rule="evenodd"
+        d="M1 1h6l8 8-6 6-8-8V1zm4 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg>标签
+    </h2>
+    <ul class="archive-list tag-page-list">
+      {% for name, count in tag_counts %}
+      <li><a href="{{ coll_url('tags', name) }}">{{ name }}<span
+        class="archive-list-count">{{ count }}</span></a></li>
+      {% endfor %}
+    </ul>
+  </aside>
+  <div id="main" class="archive-part"></div>
 </div>
 {% endblock %}

@@ -1,15 +1,37 @@
+{# 归档页：jacman archive 布局——左 .archive-title 卡（月份分组 + 篇数）+
+   右 .archive-part 条目流。月度归档页复用本模板，entries 换成该月文章。 #}
 {% extends "base.html" %}
-{% block title %}归档 | {{ spec.title }}{% endblock %}
-{% block content %}
-<h1 class="page-heading">归档</h1>
-{% for year, year_posts in years %}
-<section class="archive-section">
-  <h2 class="year-label">{{ year }}</h2>
-  <ul class="archive-list">
-    {% for p in year_posts %}
-    <li><time>{{ p.date_display }}</time><a href="/{{ p.url_path }}">{{ p.title }}</a></li>
-    {% endfor %}
-  </ul>
-</section>
-{% endfor %}
+{% block title %}{{ heading }} | {{ spec.title }}{% endblock %}
+{% block wrapper %}
+<div class="archive-wrap">
+  <aside class="archive-title">
+    <h2 class="archive-heading">
+      <svg class="archive-glyph" viewBox="0 0 16 16" aria-hidden="true"><path
+        fill="currentColor" fill-rule="evenodd"
+        d="M1 2h14v3H1V2zm1 4h12v8H2V6zm3 2v2h4V8H5z"/></svg>{{ heading }}
+    </h2>
+    {% if months %}
+    <div class="archiveslist">
+      <ul class="archive-list">
+        {% for m in months %}
+        <li><a href="{{ m.url }}">{{ m.label }}</a><span
+          class="archive-list-count">{{ m.count }}</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </aside>
+  <div id="main" class="archive-part">
+    <div id="archive-page" class="clearfix">
+      {% for p in entries %}
+      <section class="post">
+        <a href="/{{ p.url_path }}" class="clearfix">
+          <time datetime="{{ p.date_iso }}">{{ p.date_display }}</time>
+          <h1>{{ p.title }}</h1>
+        </a>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+</div>
 {% endblock %}

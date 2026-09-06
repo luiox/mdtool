@@ -1,0 +1,12 @@
+{# 右侧栏：jacman 侧栏的 Tags 组件（浅灰底块 + 主题色标题 + 药丸标签）。
+   index 与 post 页共用；上下文需提供 tag_counts（(名字, 篇数) 列表）。 #}
+<aside id="asidepart">
+  <div class="tagslist clearfix">
+    <p class="asidetitle">标签</p>
+    <ul class="clearfix">
+      {% for name, count in tag_counts %}
+      <li><a href="{{ coll_url('tags', name) }}">{{ name }}<sup>{{ count }}</sup></a></li>
+      {% endfor %}
+    </ul>
+  </div>
+</aside>

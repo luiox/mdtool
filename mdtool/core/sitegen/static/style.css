@@ -1,18 +1,24 @@
 /* mdtool sitegen —— 单文件站点样式。
-   配色与形态对齐 jacman 的视觉记忆：#2ca6cb 主题色实心 header（白字、
-   投影）、深色 footer、正文 #413f3f、代码/TOC 底 #eee；TOC 是正文右上角
-   的浮动小卡片（内容环绕），图片点击放大（灯箱）。代码块样式与 Pygments
-   主题（css/pygments.css，构建期生成）共用 .codeblock 命名空间。 */
+   布局与配色对齐原版 jacman（以本仓 worktree 出的原版 EJS/styl 与线上
+   luiox.github.io 实测计算样式为基准，非二次转述）：
+   - 全局容器 95%→96%→94%→82%（≥1560px 桌面档），不是窄栏居中
+   - 首页/文章页 = 75% 主栏 + 18% 右侧栏（margin-left 3%，Tags 组件）
+   - 归档/标签页 = 左侧 .archive-title 卡 + 右侧条目流（无侧栏）
+   - 配色：主题 #2ca6cb、橙 #ea6753、卡底 #fafafa、灰底 #ddd、正文 #413f3f
+   代码块样式与 Pygments 主题（css/pygments.css，构建期生成）共用
+   .codeblock 命名空间。 */
 
 :root {
-  --theme: #2ca6cb;         /* jacman 主题色 */
+  --theme: #2ca6cb;         /* jacman color-theme */
+  --orange: #ea6753;        /* jacman color-orange（分页当前页/hover 强调） */
   --bg: #ffffff;
-  --bg-soft: #fafafa;
+  --bg-soft: #fafafa;       /* jacman color-section */
   --code-bg: #eee;          /* jacman color-code */
   --text: #413f3f;          /* jacman color-content */
   --text-soft: #817c7c;     /* jacman color-font */
   --heading: #333333;       /* jacman color-heading */
-  --border: #ddd;           /* jacman color-background */
+  --border: #ddd;
+  --gray: #ccc;             /* jacman color-gray（左边框/分隔线） */
   --quote-bg: #f5f5f5;
   --footer-bg: #1f1f1f;     /* jacman color-footer */
   --mono: Monaco, Menlo, Consolas, "Courier New", monospace;
@@ -22,7 +28,7 @@
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
-  background: #ddd;         /* jacman：灰底 + 白色内容卡片 */
+  background: #ddd;         /* jacman color-background：灰底 + 浅色卡片 */
   color: var(--text);
   font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;
@@ -30,20 +36,17 @@ body {
   line-height: 1.8;
 }
 
-.container { max-width: 960px; margin: 0 auto; padding: 0 20px; }
-.page-card {
-  background: #fff;
-  padding: 30px 34px 26px;
-  margin-top: 24px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
-}
-@media (max-width: 700px) {
-  .page-card { padding: 20px 18px; margin-top: 14px; }
-}
+/* 全局容器宽度档位对齐原版 styl（phone/mini/tablet/desktop 断点） */
+.container { width: 95%; margin: 0 auto; padding: 0; }
+@media (min-width: 768px) { .container { width: 96%; } }
+@media (min-width: 1024px) { .container { width: 94%; } }
+@media (min-width: 1560px) { .container { width: 82%; } }
 a { color: var(--theme); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* ── 页眉（jacman：主题色实心块 + 白字 + 投影）/ 页脚（深色） ── */
+.clearfix::after { content: ""; display: block; clear: both; }
+
+/* ── 页眉（主题色实心块 + 白字 + 投影）/ 页脚（深色） ── */
 
 .site-header {
   background: var(--theme);
@@ -66,8 +69,41 @@ main.container { padding-top: 30px; padding-bottom: 8px; }
 .site-footer .container { padding-top: 20px; padding-bottom: 26px; }
 .site-footer p { margin: 0; color: #9d9d9d; font-size: 14px; }
 
+/* ── 主栏 + 侧栏骨架（首页/文章页；jacman 75% + 18%/3%） ── */
+
+.site-row { display: flex; align-items: flex-start; }
+.main-col { flex: none; width: 75%; min-width: 0; }
+#asidepart {
+  flex: none; width: 18%; margin: 2em 0 0 3%;
+  background: var(--bg-soft);
+  padding: 0.5em 2% 1em;
+}
+.asidetitle {
+  margin: 0.5em 0 0; font-size: 1.1em; font-weight: 400; color: var(--theme);
+  padding: 0 0 0.3125em; border-bottom: 3px solid var(--gray);
+}
+.tagslist { margin: 0.5em 0 0; }
+.tagslist ul { margin: 0; padding: 0.5em 0; list-style: none; }
+.tagslist li { float: left; }
+.tagslist a {
+  display: block; margin: 0.3125em; padding: 0.125em 0.3125em;
+  background: #eaeaea; color: var(--text-soft);
+}
+.tagslist a:hover { color: var(--theme); background: #f1f1f1; text-decoration: none; }
+.tagslist sup { margin-left: 2px; }
+@media (max-width: 1023px) {
+  .site-row { flex-direction: column; }
+  .main-col { width: 100%; }
+  #asidepart { width: 100%; margin: 1em 0 0; }
+}
+
 /* ── 文章页 ─────────────────────────────────────────────── */
 
+.post-expand {
+  background: var(--bg-soft);
+  padding: 30px 34px 26px;
+  margin-bottom: 2em;
+}
 .post-title { font-size: 28px; line-height: 1.4; margin: 0 0 8px; color: var(--heading); }
 .post-meta { color: var(--text-soft); font-size: 14px; }
 .post-meta time { font-variant-numeric: tabular-nums; }
@@ -155,8 +191,8 @@ main.container { padding-top: 30px; padding-bottom: 8px; }
   background: none; padding: 0; border-radius: 0;
 }
 
-/* ── TOC：jacman 原版形态——正文右上角浮动小卡片，内容环绕。
-   参数取自范本站（mouse0w0.github.io，jacman 系）实测计算样式：
+/* ── TOC：jacman 正文右上角浮动小卡片，内容环绕。
+   参数取自范本站实测计算样式：
    bg #eee / border #ddd / radius 4px / 0.8em / lh1.3 / margin 1.6em 0 0 2em /
    链接主题色 ─────────────────────────────────────────────── */
 
@@ -184,60 +220,117 @@ main.container { padding-top: 30px; padding-bottom: 8px; }
   .toc-article { float: none; max-width: 100%; margin: 0 0 1em; }
 }
 
-/* ── 列表 / 首页卡片 / 分页 ─────────────────────────────── */
+/* ── 首页卡片（原版实测：title 24px 主题色 / 摘要 16px 灰 / 底部时间） ── */
 
-.post-list { border-top: 1px solid var(--border); }
-.post-card { padding: 20px 0; border-bottom: 1px solid var(--border); }
-.card-title { font-size: 19px; margin: 0 0 4px; }
-.card-title a { color: var(--heading); }
-.card-title a:hover { color: var(--theme); text-decoration: none; }
-.card-excerpt { color: var(--text-soft); font-size: 14.5px; margin: 8px 0 0; }
-
-.tag-pill {
-  display: inline-block; padding: 1px 10px; margin-right: 6px;
-  border: 1px solid var(--border); border-radius: 999px;
-  color: var(--text-soft); font-size: 13px; line-height: 1.6;
+.post-list { border-top: none; }
+.post-card {
   background: var(--bg-soft);
+  margin-bottom: 0.125em;
+  padding: 20px 28px 12px;
 }
-.tag-pill:hover { color: var(--theme); border-color: var(--theme); text-decoration: none; }
-.tag-pill sup { margin-left: 2px; }
-.tag-mini { font-size: 12px; padding: 0 8px; }
-.tag-cloud { line-height: 2.4; }
+.card-title { font-size: 24px; font-weight: 400; margin: 0 0 6px; }
+.card-title a { color: var(--theme); }
+.card-title a:hover { color: var(--theme); text-decoration: underline; }
+.card-excerpt { color: var(--text-soft); font-size: 16px; line-height: 1.8; margin: 0 0 12px; }
+.card-date {
+  display: block; color: var(--text-soft); font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+}
 
-.pagination {
-  display: flex; align-items: center; justify-content: center;
-  gap: 18px; margin: 30px 0 6px;
+/* 正文内标签药丸（文章底部）：jacman 侧栏标签同款浅灰底 */
+.tag-pill {
+  display: inline-block; padding: 0.125em 0.3125em; margin-right: 6px;
+  background: #eaeaea; color: var(--text-soft);
+  font-size: 14px; line-height: 1.8;
 }
-.page-btn {
-  border: 1px solid var(--border); border-radius: 4px;
-  padding: 4px 14px; color: var(--text-soft); font-size: 14px;
-}
-.page-btn:hover { color: var(--theme); border-color: var(--theme); text-decoration: none; }
-.page-indicator { color: var(--text-soft); font-size: 14px; }
+.tag-pill:hover { color: var(--theme); background: #f1f1f1; text-decoration: none; }
 
-/* ── 归档 / 标签分类页 ──────────────────────────────────── */
+/* ── 分页（jacman #page-nav：浅色条、页码居中、当前页橙色、
+   Prev 靠左 / Next 靠右） ───────────────────────────────── */
 
-.page-heading { font-size: 22px; margin: 0 0 20px; color: var(--heading); }
-.year-label { font-size: 18px; color: var(--text-soft); margin: 0 0 8px; }
-.archive-section { margin-bottom: 28px; }
-.archive-list { list-style: none; margin: 0; padding: 0; }
-.archive-list li {
-  display: flex; gap: 16px; align-items: baseline;
-  padding: 7px 0; border-bottom: 1px dashed var(--border);
+#page-nav {
+  background: var(--bg-soft);
+  text-align: center;
+  margin-top: 1em;
+  padding: 0.5em 0;
+  overflow: hidden;
 }
-.archive-list time {
-  color: var(--text-soft); font-size: 14px;
-  font-variant-numeric: tabular-nums; flex-shrink: 0;
+#page-nav a {
+  display: inline-block; padding: 0.5em 1em; color: var(--theme);
+}
+#page-nav a:hover { background: var(--gray); color: var(--theme); text-decoration: none; }
+#page-nav .prev { float: left; }
+#page-nav .next { float: right; }
+#page-nav .page-number { display: inline-block; padding: 0.5em 1em; }
+#page-nav .current { color: var(--orange); font-weight: 700; }
+
+/* ── 归档/标签页（jacman archive 布局：左 .archive-title 卡 +
+   右 .archive-part 条目流；条目 time 占左 20%、标题 1.5em 主题色、
+   0.5em 灰左边框 hover 变主题色。数值取自线上实测。） ── */
+
+.archive-wrap {
+  display: flex; align-items: flex-start;
+  margin-top: 2em;
+}
+.archive-title {
+  flex: none; width: 21.6%;
+  background: var(--bg-soft);
+  border-left: 0.5em solid var(--gray);
+  padding: 2em;
+  padding-left: 1em;
+}
+.archive-title h2 {
+  display: flex; align-items: center; gap: 6px;
+  width: 90%; margin: 0;
+  color: var(--theme); font-size: 1.2em; font-weight: 400;
+}
+.archive-glyph { width: 1em; height: 1em; color: var(--gray); flex-shrink: 0; }
+.archiveslist { margin: 1em 0 0; }
+.archive-list { margin: 0; padding: 0.5em 0; list-style: none; }
+.archive-list li { font-size: 0.8em; line-height: 2em; white-space: nowrap; }
+.archive-list a { padding: 0.5em; }
+.archive-list a:hover { color: var(--theme); }
+.archive-list .archive-list-count { color: var(--text-soft); }
+.archive-list .archive-list-count::before { content: "("; }
+.archive-list .archive-list-count::after { content: ")"; }
+
+.archive-part { flex: 1; min-width: 0; margin-left: 2%; }
+.archive-part section.post { background: var(--bg-soft); margin-bottom: 0.125em; }
+#archive-page section.post a {
+  display: block;
+  font-size: 0.9em;
+  border-left: 0.5em solid var(--gray);
+  transition: border-left 0.45s;
+  padding: 0.5em;
+}
+#archive-page section.post a:hover { border-left-color: var(--theme); text-decoration: none; }
+#archive-page section.post a time {
+  float: left; width: 20%; padding-left: 1em;
+  color: var(--text-soft); font-size: 1.1em; line-height: 2;
+  font-variant-numeric: tabular-nums;
+}
+#archive-page section.post a h1 {
+  margin: 0; color: var(--theme);
+  font-size: 1.5em; font-weight: 400; line-height: 2;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 1023px) {
+  .archive-wrap { flex-direction: column; }
+  .archive-title { width: 100%; padding: 1em; }
+  .archive-part { width: 100%; margin-left: 0; margin-top: 1em; }
+  #archive-page section.post a time { float: none; display: block; width: auto; padding-left: 1em; }
+  #archive-page section.post a h1 { white-space: normal; }
 }
 
 /* ── 相邻文章导航 ───────────────────────────────────────── */
 
-.post-neighbors { display: flex; justify-content: space-between; gap: 14px; margin-top: 36px; }
+.post-neighbors { display: flex; justify-content: space-between; gap: 14px; margin-top: 0; }
 .neighbor {
   flex: 1; min-width: 0; max-width: 48%;
   display: flex; flex-direction: column; gap: 2px;
   border: 1px solid var(--border); border-radius: 4px;
   padding: 10px 14px;
+  background: var(--bg-soft);
 }
 .neighbor:hover { border-color: var(--theme); text-decoration: none; }
 .neighbor-right { margin-left: auto; text-align: right; }
