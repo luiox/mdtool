@@ -193,6 +193,13 @@ def test_build_site_full_tree(tmp_path):
     assert (out / "page" / "2" / "index.html").is_file()
     # 归档/标签/分类/feed/sitemap/静态资源/媒体
     assert (out / "archives" / "index.html").is_file()
+    # 月度归档页（jacman 形态：左侧月份分组 + /archives/YYYY/MM/ 页面）
+    assert (out / "archives" / "2026" / "03" / "index.html").is_file()
+    assert (out / "archives" / "2026" / "05" / "index.html").is_file()
+    month_05 = (out / "archives" / "2026" / "05" / "index.html").read_text(
+        encoding="utf-8")
+    assert "文章二" in month_05 and "文章一" not in month_05
+    assert (out / "favicon.ico").is_file()
     assert (out / "tags" / "index.html").is_file()
     assert (out / "tags" / "t1" / "index.html").is_file()
     assert (out / "categories" / "C" / "index.html").is_file()

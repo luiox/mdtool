@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ spec.title }}{% endblock %}</title>
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/pygments.css">
   {% if mathjax %}
@@ -24,9 +27,7 @@
   </div>
 </header>
 <main class="container">
-  <div class="page-card">
-{% block content %}{% endblock %}
-  </div>
+{% block wrapper %}{% endblock %}
 </main>
 <footer class="site-footer">
   <div class="container">

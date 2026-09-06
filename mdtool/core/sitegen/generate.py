@@ -26,8 +26,9 @@ from mdtool.core.blog import parse_front_matter
 from mdtool.core.sitegen import resource_dir
 from mdtool.core.sitegen.render import TocItem, pygments_css, render_markdown
 
-# 静态资源落位：包内 static/<name> → 输出 <dir>/<name>
+# 静态资源落位：包内 static/<name> → 输出 <dir>/<name>；二进制走字节复制
 _STATIC_FILES = {"style.css": "css/style.css", "site.js": "js/site.js"}
+_STATIC_BINARIES = ["favicon.ico", "favicon.svg", "apple-touch-icon.png"]
 _FEED_LIMIT_DEFAULT = 20
 
 
@@ -212,6 +213,8 @@ def build_site(posts: list[PostInput], spec: SiteSpec, *,
     env = _jinja_env()
     env.globals["abs_url"] = _abs_url_factory(spec)
     env.globals["coll_url"] = _coll_url
+    # 侧栏 Tags 组件与标签云共用（首页/文章页上下文也需要）
+    tag_counts = _counts(p.tags for p in ordered)
 
     out = Path(out_dir)
     written = 0
@@ -227,7 +230,8 @@ def build_site(posts: list[PostInput], spec: SiteSpec, *,
     for i, post in enumerate(ordered):
         newer = ordered[i - 1] if i > 0 else None
         older = ordered[i + 1] if i + 1 < len(ordered) else None
-        ctx = dict(spec=spec, post=post, newer=newer, older=older, mathjax=post.mathjax)
+        ctx = dict(spec=spec, post=post, newer=newer, older=older, mathjax=post.mathjax,
+                   tag_counts=tag_counts)
         write(post.url_path, env.get_template("post.html").render(**ctx))
 
     # 首页分页
@@ -238,33 +242,43 @@ def build_site(posts: list[PostInput], spec: SiteSpec, *,
         write("index.html" if page_no == 1 else f"page/{page_no}/index.html",
               env.get_template("index.html").render(
                   spec=spec, posts=chunk, page_no=page_no,
-                  total_pages=total_pages,
+                  total_pages=total_pages, tag_counts=tag_counts,
                   page_url=_page_url, mathjax=False))
 
-    # 归档（按年分组，年倒序）
-    by_year: dict[int, list[RenderedPost]] = {}
+    # 归档：主页（左侧月份分组 + 右侧条目流，jacman 形态）+ 月度归档页
+    by_month: dict[tuple[int, int], list[RenderedPost]] = {}
     for p in ordered:
         if p.date is not None:
-            by_year.setdefault(p.date.year, []).append(p)
-    years = sorted(by_year, reverse=True)
+            by_month.setdefault((p.date.year, p.date.month), []).append(p)
+    month_keys = sorted(by_month, reverse=True)
+    month_list = [
+        {"label": f"{y} 年 {m:02d} 月", "url": f"/archives/{y}/{m:02d}/",
+         "count": len(by_month[(y, m)])}
+        for y, m in month_keys
+    ]
     write("archives/index.html",
           env.get_template("archive.html").render(
-              spec=spec, years=[(y, by_year[y]) for y in years], mathjax=False))
+              spec=spec, heading="归档", months=month_list, entries=ordered,
+              mathjax=False))
+    for (y, m) in month_keys:
+        write(f"archives/{y}/{m:02d}/index.html",
+              env.get_template("archive.html").render(
+                  spec=spec, heading=f"{y} 年 {m:02d} 月", months=month_list,
+                  entries=by_month[(y, m)], mathjax=False))
 
-    # 标签云 + 标签页；分类页
-    tag_counts = _counts(p.tags for p in ordered)
+    # 标签页 + 分类页（heading 只放名称，jacman 语义）
     write("tags/index.html", env.get_template("tags.html").render(
         spec=spec, tag_counts=tag_counts, mathjax=False))
     for name, _n in tag_counts:
         write(f"tags/{quote(str(name))}/index.html",
               env.get_template("list.html").render(
-                  spec=spec, heading=f"标签：{name}",
+                  spec=spec, heading=str(name),
                   posts=[p for p in ordered if name in p.tags], mathjax=False))
     cat_names = {p.category_path for p in ordered if p.category_path}
     for cpath in sorted(cat_names):
         write(f"categories/{quote(cpath, safe='/')}/index.html",
               env.get_template("list.html").render(
-                  spec=spec, heading=f"分类：{cpath}",
+                  spec=spec, heading=cpath,
                   posts=[p for p in ordered if p.category_path == cpath],
                   mathjax=False))
 
@@ -275,6 +289,7 @@ def build_site(posts: list[PostInput], spec: SiteSpec, *,
         updated_iso=feed[0].date_iso if feed else _now_iso(), mathjax=False))
     site_paths = ["/", "/archives/"] + [f"/{p.url_path}" for p in ordered] \
         + [f"/page/{k}/" for k in range(2, total_pages + 1)] \
+        + [m["url"] for m in month_list] \
         + [f"/tags/{quote(str(n))}/" for n, _ in tag_counts] \
         + [f"/categories/{quote(c, safe='/')}/" for c in sorted(cat_names)]
     write("sitemap.xml", env.get_template("sitemap.xml").render(
@@ -285,6 +300,12 @@ def build_site(posts: list[PostInput], spec: SiteSpec, *,
     static_dir = resource_dir() / "static"
     for name, rel in _STATIC_FILES.items():
         write(rel, (static_dir / name).read_text(encoding="utf-8"))
+    for name in _STATIC_BINARIES:
+        src = static_dir / name
+        dst = out / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+        written += 1
     write("css/pygments.css", pygments_css() + "\n")
     if assets_src is not None and Path(assets_src).is_dir():
         shutil.copytree(assets_src, out / "assets", dirs_exist_ok=True)

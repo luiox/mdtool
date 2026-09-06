@@ -1,10 +1,27 @@
+{# 标签/分类页：jacman 同款 archive 布局——左卡只放图标+名称（无月份列表），
+   右侧条目流。 #}
 {% extends "base.html" %}
 {% block title %}{{ heading }} | {{ spec.title }}{% endblock %}
-{% block content %}
-<h1 class="page-heading">{{ heading }}</h1>
-<ul class="archive-list">
-  {% for p in posts %}
-  <li><time>{{ p.date_display }}</time><a href="/{{ p.url_path }}">{{ p.title }}</a></li>
-  {% endfor %}
-</ul>
+{% block wrapper %}
+<div class="archive-wrap">
+  <aside class="archive-title">
+    <h2 class="archive-heading">
+      <svg class="archive-glyph" viewBox="0 0 16 16" aria-hidden="true"><path
+        fill="currentColor" fill-rule="evenodd"
+        d="M1 1h6l8 8-6 6-8-8V1zm4 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg>{{ heading }}
+    </h2>
+  </aside>
+  <div id="main" class="archive-part">
+    <div id="archive-page" class="clearfix">
+      {% for p in posts %}
+      <section class="post">
+        <a href="/{{ p.url_path }}" class="clearfix">
+          <time datetime="{{ p.date_iso }}">{{ p.date_display }}</time>
+          <h1>{{ p.title }}</h1>
+        </a>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+</div>
 {% endblock %}
