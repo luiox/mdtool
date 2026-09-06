@@ -46,8 +46,9 @@ _ISSUE_KINDS = {
 }
 
 # hexo 命令统一走 npm run（Windows 下 npm 自动解析本地 node_modules/.bin，
-# 免去 hexo.cmd 路径问题）；命令清单见 docs/博客工作流.md
-_PUBLISH_COMMANDS = ["npm run generate", "npm run deploy"]
+# 免去 hexo.cmd 路径问题）；命令清单见 docs/博客工作流.md。脚本名以博客仓
+# package.json 为准：生成脚本是 build（不是 generate）。
+_PUBLISH_COMMANDS = ["npm run build", "npm run deploy"]
 _CLEAN_COMMANDS = ["npm run clean"]
 _PREVIEW_URL = "http://localhost:4000"
 
