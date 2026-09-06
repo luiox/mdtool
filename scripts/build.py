@@ -102,7 +102,9 @@ hiddenimports = [
 ]
 # 轻量第三方包整体收集；PySide6 不做 collect_all（会把 WebEngine/3D 等
 # 全部拖进来，体积 240MB+），改为显式列出用到的 Qt 模块，插件由 Qt hook 按需带出。
-for pkg in ('libmarkdown', 'watchdog'):
+# pygments 必须整体收集：词法器按名字懒加载（importlib），静态分析收不到，
+# 打包后 get_lexer_by_name 会全部 ClassNotFound（高亮静默退化为纯文本）。
+for pkg in ('libmarkdown', 'watchdog', 'pygments'):
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 hiddenimports += ['PySide6.QtCore','PySide6.QtGui','PySide6.QtWidgets',
