@@ -1,6 +1,6 @@
 """过渡期适配器：现有 Hexo 源仓 → sitegen 输入（阶段 1/2 用，阶段 3 退役）。
 
-博客源仓（luiox.github.io-src）的文章与 id 索引搬到 sitegen 的模型：
+Hexo 博客源仓的文章与 id 索引搬到 sitegen 的模型：
 
 - ``passage_index.json``（``{"next_index": N, "posts": [{"path","id"}]}``）
   → :class:`Manifest`，note 键原样保留仓内 posix 路径——存量 28 个 id 逐一
