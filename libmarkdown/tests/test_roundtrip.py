@@ -1,6 +1,8 @@
 """Round-trip idempotency tests — read → write → compare byte-for-byte."""
 
 from pathlib import Path
+import os
+
 import pytest
 from libmarkdown import Document
 
@@ -51,7 +53,12 @@ def test_roundtrip_multiple_blank_lines():
     assert str(doc) == md
 
 def test_roundtrip_validate_all_notes():
-    NOTE_ROOT = Path("D:/Canrad/notes")
+    # 针对真实个人笔记库的 roundtrip 巡检：本机路径不入公共仓库，
+    # 通过环境变量 MDTOOL_NOTES_ROOT 显式提供时才跑。
+    root = os.environ.get("MDTOOL_NOTES_ROOT")
+    if not root:
+        pytest.skip("MDTOOL_NOTES_ROOT not set")
+    NOTE_ROOT = Path(root)
     if not NOTE_ROOT.exists():
         pytest.skip(f"{NOTE_ROOT} not found")
     failed = []
