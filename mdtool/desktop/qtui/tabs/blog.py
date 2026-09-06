@@ -35,6 +35,10 @@ from PySide6.QtWidgets import (
 )
 
 from mdtool.core import blog
+from mdtool.core.sitegen import deploy as sg_deploy
+from mdtool.core.sitegen import legacy as sg_legacy
+from mdtool.core.sitegen import preview as sg_preview
+from mdtool.core.sitegen.generate import build_site
 from mdtool.desktop.qtui.tabs.file_browser import collect_media_config, open_external
 from mdtool.desktop.qtui.widgets import BaseTab, muted_label
 from mdtool.desktop.qtui.workers import start_worker
@@ -51,6 +55,41 @@ _ISSUE_KINDS = {
 _PUBLISH_COMMANDS = ["npm run build", "npm run deploy"]
 _CLEAN_COMMANDS = ["npm run clean"]
 _PREVIEW_URL = "http://localhost:4000"
+
+# sitegen（自研生成器，阶段 2）：输出与部署克隆都放博客仓内、与 hexo 的
+# public/.deploy_git 隔离，发布通道切换期两套并存互不踩。
+_SITEGEN_OUT = "public-sitegen"
+_SITEGEN_DEPLOY_DIR = ".deploy_git-sitegen"
+
+
+def _sitegen_build(blog_root: Path, report) -> object:
+    """整站生成到 ``<blog>/public-sitegen``（worker 线程，日志逐行回传）。"""
+    spec = sg_legacy.load_legacy_spec(blog_root)
+    manifest = sg_legacy.load_legacy_manifest(blog_root)
+    inputs, missing = sg_legacy.legacy_post_inputs(blog_root, manifest)
+    for m in missing:
+        report("log", msg=f"[失联] {m}", level="WARN")
+    report("log", msg=f"sitegen：{len(inputs)} 篇文章，开始生成…")
+    rpt = build_site(inputs, spec, assets_src=sg_legacy.legacy_assets_dir(blog_root),
+                     out_dir=Path(blog_root) / _SITEGEN_OUT)
+    report("log", msg=f"生成完成：文章 {rpt.posts}，文件 {rpt.files}，"
+                      f"跳过 {len(rpt.skipped)}")
+    for s in rpt.skipped:
+        report("log", msg=f"[skip] {s}", level="WARN")
+    return rpt
+
+
+def _sitegen_deploy(blog_root: Path, report) -> list[tuple[str, int]]:
+    """生成 + git 直推产物仓（worker 线程）。repo 未配置即抛错拒绝。"""
+    repo, branch = sg_legacy.load_legacy_deploy(blog_root)
+    if not repo:
+        raise RuntimeError("博客源 _config.yml 未配置 deploy.repo，无法直推产物仓")
+    out = Path(blog_root) / _SITEGEN_OUT
+    _sitegen_build(blog_root, report)
+    plan = sg_deploy.plan_git_deploy(
+        out_dir=out, repo_url=repo, branch=branch,
+        deploy_dir=Path(blog_root) / _SITEGEN_DEPLOY_DIR)
+    return sg_deploy.run_git_deploy(plan, out_dir=out, report=report)
 
 
 def _hexo_job(root: Path, commands: list[str], report) -> list[tuple[str, int]]:
@@ -102,6 +141,7 @@ def _parse_meta(text: str) -> tuple:
 class BlogPage(BaseTab):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._preview: sg_preview.SitePreview | None = None
         self._build_ui()
 
     # ── UI ──
@@ -154,6 +194,22 @@ class BlogPage(BaseTab):
         pub.addWidget(muted_label("发布 = hexo generate + deploy（输出见日志页）；"
                                   "预览 = hexo server，独立控制台"))
         root.addLayout(pub)
+
+        sg = QHBoxLayout()
+        btn_sg_gen = QPushButton("生成站点（sitegen）")
+        btn_sg_gen.clicked.connect(self.generate_site)
+        btn_sg_pub = QPushButton("发布站点（sitegen）")
+        btn_sg_pub.setProperty("variant", "primary")
+        btn_sg_pub.clicked.connect(self.publish_sitegen)
+        btn_sg_prev = QPushButton("预览站点")
+        btn_sg_prev.clicked.connect(self.preview_sitegen)
+        self._busy_btns = self._busy_btns + (btn_sg_gen, btn_sg_pub)
+        for b in (btn_sg_gen, btn_sg_pub, btn_sg_prev):
+            sg.addWidget(b)
+        sg.addStretch(1)
+        sg.addWidget(muted_label("sitegen = 自研生成器：生成到 public-sitegen/，"
+                                 "发布 = 生成 + git 直推产物仓（hexo 通道保留作回退）"))
+        root.addLayout(sg)
 
         split = QSplitter(Qt.Orientation.Vertical)
         self.table = QTreeWidget()
@@ -387,6 +443,80 @@ class BlogPage(BaseTab):
             on_error=self._on_worker_error,
         )
 
+    # ── sitegen 行（自研生成器，阶段 2）──
+
+    def generate_site(self):
+        """sitegen 整站生成到 public-sitegen/（不动 hexo 的 public/）。"""
+        if not self._require_source():
+            return
+        self._set_busy(True)
+        start_worker(
+            _sitegen_build, self.root_dir,
+            on_log=self.log,
+            on_finished=self._on_sitegen_done,
+            on_error=self._on_worker_error,
+        )
+
+    def _on_sitegen_done(self, rpt):
+        self._set_busy(False)
+        self.log(f"sitegen 生成完成：文章 {rpt.posts}，文件 {rpt.files}")
+
+    def publish_sitegen(self):
+        """sitegen 发布 = 生成 + git 直推产物仓（无需 node/hexo）。"""
+        if not self._require_source():
+            return
+        repo, branch = sg_legacy.load_legacy_deploy(self.root_dir)
+        if not repo:
+            QMessageBox.warning(self, "提示",
+                                "博客源 _config.yml 未配置 deploy.repo，无法直推产物仓")
+            return
+        if QMessageBox.question(
+                self, "sitegen 发布",
+                f"生成整站并直推 {repo}（{branch} 分支）？\n"
+                f"输出 public-sitegen/，部署克隆 .deploy_git-sitegen/（首推自动 clone）。"
+                ) != QMessageBox.StandardButton.Yes:
+            return
+        self._set_busy(True)
+        start_worker(
+            _sitegen_deploy, self.root_dir,
+            on_log=self.log,
+            on_finished=self._on_sitegen_published,
+            on_error=self._on_worker_error,
+        )
+
+    def _on_sitegen_published(self, done):
+        self._set_busy(False)
+        self.log("sitegen 发布完成：" + " → ".join(cmd for cmd, _rc in done))
+
+    def preview_sitegen(self):
+        """预览 sitegen 产物：未生成就先生成，然后起内置服务器并开浏览器。"""
+        if not self._require_source():
+            return
+        out = self.root_dir / _SITEGEN_OUT
+        if not (out / "index.html").is_file():
+            self._set_busy(True)
+            start_worker(
+                _sitegen_build, self.root_dir,
+                on_log=self.log,
+                on_finished=self._on_preview_build_done,
+                on_error=self._on_worker_error,
+            )
+            return
+        self._open_preview()
+
+    def _on_preview_build_done(self, rpt):
+        self._set_busy(False)
+        self.log(f"sitegen 生成完成（{rpt.files} 个文件），预览即将打开")
+        self._open_preview()
+
+    def _open_preview(self):
+        """内置预览服务器幂等启动（端口内核分配），开浏览器。"""
+        if self._preview is None or not self._preview.running:
+            self._preview = sg_preview.SitePreview(self.root_dir / _SITEGEN_OUT)
+            self._preview.start()
+            self.log(f"站点预览已启动: {self._preview.url}（随应用退出停止）")
+        open_external(self._preview.url)
+
     # ── B2 校验 ──
 
     def validate_all(self):
@@ -458,6 +588,12 @@ class BlogPage(BaseTab):
         self._reload()
 
     # ── 杂项 ──
+
+    def shutdown(self):
+        """停掉 sitegen 预览服务器（hexo server 是独立控制台，无需管理）。"""
+        if self._preview is not None:
+            self._preview.stop()
+        super().shutdown()
 
     def _set_busy(self, busy: bool):
         for b in self._busy_btns:
