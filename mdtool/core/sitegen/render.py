@@ -30,8 +30,9 @@ from pygments.util import ClassNotFound
 
 # TOC 收集的标题层级（hexo/jacman 的 TOC 深度习惯：h2-h4）
 _TOC_LEVELS = (2, 3, 4)
-# 复制按钮文案（站点 JS 就地反馈，首态与反馈态都从这里出，模板 JS 不重复写字符串）
-_COPY_LABEL = "复制"
+# 复制按钮文案缺省值（site.json 可覆盖；站点 JS 的反馈文案与首态一致，
+# 主题换文案时须同步改 site.js，见 docs/博客主题定制.md 的渲染契约一节）
+COPY_LABEL_DEFAULT = "复制"
 
 _PYGM_FORMATTER = HtmlFormatter(nowrap=True)
 
@@ -90,11 +91,13 @@ def _is_external(dest: str, site_host: str) -> bool:
     return not (rest == site_host or rest.startswith(site_host + "/"))
 
 
-def _render_fence(self, tokens, idx: int, options, env) -> str:
+def _render_fence(self, tokens, idx: int, options, env, *,
+                  copy_label: str = COPY_LABEL_DEFAULT) -> str:
     """fence 渲染：figure 外壳 + 语言标签 + 复制按钮 + Pygments 高亮。
 
     签名按 markdown-it-py 约定：首参是 renderer 实例（add_render_rule
-    以显式 self 调用），其余为 (tokens, idx, options, env)。
+    以显式 self 调用），其余为 (tokens, idx, options, env)；copy_label
+    由 build_md 的闭包捕获（站点配置可换文案）。
     """
     token = tokens[idx]
     info = (token.info or "").strip()
@@ -104,19 +107,26 @@ def _render_fence(self, tokens, idx: int, options, env) -> str:
     return (
         '<figure class="codeblock">'
         f'<figcaption class="codeblock-bar"><span class="codeblock-lang">{lang_label}</span>'
-        f'<button type="button" class="code-copy-btn">{_COPY_LABEL}</button></figcaption>'
+        f'<button type="button" class="code-copy-btn">{_html.escape(copy_label)}</button></figcaption>'
         f'<pre><code class="language-{lang_label.lower()}">{body}</code></pre>'
         "</figure>\n"
     )
 
 
-def build_md() -> MarkdownIt:
+def build_md(*, copy_label: str = COPY_LABEL_DEFAULT) -> MarkdownIt:
     """构造渲染器实例（无状态可复用；anchors 的 slug 保留 CJK 并页内去重）。"""
     md = MarkdownIt("commonmark", {"html": True, "linkify": True})
     md.enable(["table", "strikethrough"])
     # slugify 默认实现保留 CJK 并页内去重（GitHub 风格），正合中文标题锚点
     anchors_plugin(md, min_level=min(_TOC_LEVELS), max_level=max(_TOC_LEVELS))
-    md.add_render_rule("fence", _render_fence)
+
+    def fence(renderer, tokens, idx, options, env):
+        # 闭包捕获 copy_label——add_render_rule 以 __get__ 绑定首参，
+        # partial 对象没有该方法，必须包一层普通函数
+        return _render_fence(renderer, tokens, idx, options, env,
+                             copy_label=copy_label)
+
+    md.add_render_rule("fence", fence)
     return md
 
 
@@ -157,13 +167,14 @@ def _walk_inline(children, site_host: str) -> list[str]:
     return texts
 
 
-def render_markdown(src: str, *, site_host: str = "") -> RenderResult:
+def render_markdown(src: str, *, site_host: str = "",
+                    copy_label: str = COPY_LABEL_DEFAULT) -> RenderResult:
     """单篇正文 → (HTML, TOC, 纯文本摘要)。
 
     摘要取正文开头约 200 字（front-matter description 缺失时首页列表用）；
     parse 一次，token 树同时供链接改写、TOC 提取、摘要收集，渲染复用同一棵树。
     """
-    md = build_md()
+    md = build_md(copy_label=copy_label)
     tokens = md.parse(src)
     toc: list[TocItem] = []
     excerpt_parts: list[str] = []

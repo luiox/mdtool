@@ -7,8 +7,11 @@ URL 语义与 Hexo 产物对齐（阶段 1 验收线）：
   ``/tags/<name>/``；分类页 ``/categories/<path>/``（多级以 / 连接）
 - ``atom.xml``（feed_limit 篇）、``sitemap.xml``、``css/``、``js/``、``assets/``
 
-模板/静态资源是包内数据目录；jinja autoescape 常开，正文 HTML 以 ``| safe``
-显式放行（仅来自 render_markdown）。写盘集中在 build_site，其余纯函数。
+模板/静态资源是包内数据目录（默认主题）；博客目录的 ``theme/`` 可按文件
+覆盖（模板单文件、静态整树合并，查找顺序主题优先），``theme_dir=None``
+即纯默认主题。jinja autoescape 常开，正文 HTML 以 ``| safe`` 显式放行
+（仅来自 render_markdown）。写盘集中在 build_site，其余纯函数。
+主题定制契约见 docs/博客主题定制.md。
 """
 
 from __future__ import annotations
@@ -20,21 +23,29 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import ChoiceLoader, Environment, FileSystemLoader
 
 from mdtool.core.blog import parse_front_matter
 from mdtool.core.sitegen import resource_dir
-from mdtool.core.sitegen.render import TocItem, pygments_css, render_markdown
+from mdtool.core.sitegen.render import (
+    COPY_LABEL_DEFAULT, TocItem, pygments_css, render_markdown)
 
 # 静态资源落位：包内 static/<name> → 输出 <dir>/<name>；二进制走字节复制
 _STATIC_FILES = {"style.css": "css/style.css", "site.js": "js/site.js"}
 _STATIC_BINARIES = ["favicon.ico", "favicon.svg", "apple-touch-icon.png"]
 _FEED_LIMIT_DEFAULT = 20
+# Pygments 高亮主题缺省（site.json 的 pygments_style 键可换，见 pygments 文档）
+_PYGMENTS_STYLE_DEFAULT = "friendly"
 
 
 @dataclass(frozen=True)
 class SiteSpec:
-    """站点元信息（Hexo _config.yml 的 sitegen 对应物）。url 无尾斜杠。"""
+    """站点元信息（Hexo _config.yml 的 sitegen 对应物）。url 无尾斜杠。
+
+    pygments_style/copy_label 是主题级 knobs（site.json 可改）：前者换
+    构建期高亮主题，后者换代码复制按钮文案（换文案须同步覆盖主题的
+    static/js/site.js，其反馈文案与首态一致）。
+    """
 
     title: str
     url: str
@@ -42,6 +53,8 @@ class SiteSpec:
     language: str = "zh-CN"
     per_page: int = 10
     feed_limit: int = _FEED_LIMIT_DEFAULT
+    pygments_style: str = _PYGMENTS_STYLE_DEFAULT
+    copy_label: str = COPY_LABEL_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -157,7 +170,8 @@ def _number_toc(toc: tuple[TocItem, ...]) -> tuple[TocItem, ...]:
     return tuple(out)
 
 
-def render_post(inp: PostInput, *, site_host: str = "") -> RenderedPost:
+def render_post(inp: PostInput, *, site_host: str = "",
+                copy_label: str = COPY_LABEL_DEFAULT) -> RenderedPost:
     """单篇 → RenderedPost（front-matter 解析 + 渲染）。
 
     文件不可读（IO/非 UTF-8）抛 ValueError 交由 build_site 记入 skipped；
@@ -167,7 +181,7 @@ def render_post(inp: PostInput, *, site_host: str = "") -> RenderedPost:
     if not text:
         raise ValueError(f"无法读取（IO 失败或非 UTF-8）: {inp.path.name}")
     meta, body = _split_meta(text)
-    rr = render_markdown(body, site_host=site_host)
+    rr = render_markdown(body, site_host=site_host, copy_label=copy_label)
     date = _parse_date(meta.get("date"))
     if date is None:
         try:
@@ -183,9 +197,20 @@ def render_post(inp: PostInput, *, site_host: str = "") -> RenderedPost:
         toc=_number_toc(rr.toc), html=rr.html, excerpt=rr.excerpt)
 
 
-def _jinja_env() -> Environment:
+def _jinja_env(theme_dir: Optional[Path] = None) -> Environment:
+    """模板环境：主题目录优先、包内默认兜底（ChoiceLoader 逐文件回退）。
+
+    主题只需放想改的模板（如只有 index.html），extends/include 的其余
+    模板自动落到包内默认——单文件覆盖而非整套拷贝。
+    """
+    loaders = []
+    if theme_dir is not None:
+        themed = Path(theme_dir) / "templates"
+        if themed.is_dir():
+            loaders.append(FileSystemLoader(str(themed)))
+    loaders.append(FileSystemLoader(str(resource_dir() / "templates")))
     return Environment(
-        loader=FileSystemLoader(resource_dir() / "templates"),
+        loader=ChoiceLoader(loaders),
         autoescape=True, trim_blocks=True, lstrip_blocks=True)
 
 
@@ -197,20 +222,27 @@ def _sorted_by_date(posts: list[RenderedPost]) -> list[RenderedPost]:
 
 def build_site(posts: list[PostInput], spec: SiteSpec, *,
                assets_src: Optional[Path] = None,
+               theme_dir: Optional[Path] = None,
                out_dir: Path) -> "BuildReport":
     """整站生成。posts 全量渲染后写各页面 + 静态资源；单篇失败记入 skipped
     不中断整站（与 mdtool 读取兜底哲学一致）。输出目录不清理——重复合成
-    覆盖同名文件，陈旧文件清理归调用方（对齐 hexo clean/generate 分离）。"""
+    覆盖同名文件，陈旧文件清理归调用方（对齐 hexo clean/generate 分离）。
+
+    theme_dir 是博客目录的主题根（含 templates/ static/ 子目录，可为
+    None）：模板逐文件覆盖包内默认；静态资源在包内默认与 pygments.css
+    之后整树合并拷贝，同名文件主题赢——主题连生成的 pygments.css 都可
+    再覆盖。"""
     rendered: list[RenderedPost] = []
     skipped: list[str] = []
     for inp in posts:
         try:
-            rendered.append(render_post(inp, site_host=spec.url.split("://", 1)[-1]))
+            rendered.append(render_post(inp, site_host=spec.url.split("://", 1)[-1],
+                                        copy_label=spec.copy_label))
         except Exception as e:  # noqa: BLE001 —— 单篇坏不拖垮整站
             skipped.append(f"{inp.path.name}: {e}")
     ordered = _sorted_by_date(rendered)
 
-    env = _jinja_env()
+    env = _jinja_env(theme_dir)
     env.globals["abs_url"] = _abs_url_factory(spec)
     env.globals["coll_url"] = _coll_url
     # 侧栏 Tags 组件与标签云共用（首页/文章页上下文也需要）
@@ -296,7 +328,7 @@ def build_site(posts: list[PostInput], spec: SiteSpec, *,
         spec=spec, paths=site_paths,
         lastmod=_today(), mathjax=False))
 
-    # 静态资源 + 高亮主题 + 媒体
+    # 静态资源 + 高亮主题 + 主题覆盖 + 媒体（顺序即覆盖序：主题最后，全赢）
     static_dir = resource_dir() / "static"
     for name, rel in _STATIC_FILES.items():
         write(rel, (static_dir / name).read_text(encoding="utf-8"))
@@ -306,7 +338,8 @@ def build_site(posts: list[PostInput], spec: SiteSpec, *,
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
         written += 1
-    write("css/pygments.css", pygments_css() + "\n")
+    write("css/pygments.css", pygments_css(spec.pygments_style) + "\n")
+    written += _overlay_static(theme_dir, out)
     if assets_src is not None and Path(assets_src).is_dir():
         shutil.copytree(assets_src, out / "assets", dirs_exist_ok=True)
 
@@ -318,6 +351,27 @@ class BuildReport:
     posts: int
     files: int
     skipped: tuple[str, ...]
+
+
+def _overlay_static(theme_dir: Optional[Path], out: Path) -> int:
+    """主题静态树合并拷入输出目录（保留相对路径，同名覆盖包内默认）。
+
+    只拷文件、跳过缺失/空目录；返回拷贝件数（计入 BuildReport.files）。
+    """
+    if theme_dir is None:
+        return 0
+    src_root = Path(theme_dir) / "static"
+    if not src_root.is_dir():
+        return 0
+    count = 0
+    for p in sorted(src_root.rglob("*")):
+        if not p.is_file():
+            continue
+        dst = out / p.relative_to(src_root)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(p, dst)
+        count += 1
+    return count
 
 
 def _counts(tag_iter) -> list[tuple[str, int]]:
