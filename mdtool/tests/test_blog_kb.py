@@ -85,6 +85,29 @@ def test_load_site_config_defaults_and_roundtrip(tmp_path):
     assert load_site_config(tmp_path).spec.title == tmp_path.name
 
 
+def test_site_config_theme_key_and_theme_root(tmp_path):
+    """theme 键：roundtrip、非法名回退默认、目录不存在时 theme_root=None。"""
+    from mdtool.core.sitegen.kb import theme_root
+
+    save_site_config(tmp_path, SiteConfig(
+        spec=load_site_config(tmp_path).spec, theme="themes/jacman"))
+    cfg = load_site_config(tmp_path)
+    assert cfg.theme == "themes/jacman"
+    assert theme_root(tmp_path, cfg) is None  # 目录还没建
+
+    (tmp_path / "themes" / "jacman").mkdir(parents=True)
+    assert theme_root(tmp_path, cfg) == tmp_path / "themes" / "jacman"
+
+    # 非法名（盘符/上跳/空）→ 回退默认名，绝不指到 B 之外；"/etc" 被强制相对化
+    for bad in ("..\\x", "..", "", "C:/Windows", "/etc/../x"):
+        (tmp_path / "site.json").write_text(
+            json.dumps({"theme": bad}), encoding="utf-8")
+        assert load_site_config(tmp_path).theme == "theme"
+    (tmp_path / "site.json").write_text(json.dumps({"theme": "/etc"}),
+                                        encoding="utf-8")
+    assert load_site_config(tmp_path).theme == "etc"
+
+
 def test_manifest_post_inputs_selected_filter_and_missing(tmp_path):
     (tmp_path / "blog").mkdir()
     (tmp_path / "blog" / "a.md").write_text("a", encoding="utf-8")

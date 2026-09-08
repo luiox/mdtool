@@ -120,9 +120,13 @@ def _kb_build(kb_root: Path, blog_dir: Path, report) -> object:
     for m in missing:
         report("log", msg=f"[失联] {m}", level="WARN")
     cfg = sg_kb.load_site_config(blog_dir)
+    theme = sg_kb.theme_root(blog_dir, cfg)
+    if theme is not None:
+        report("log", msg=f"sitegen：主题 {cfg.theme}/（模板/静态逐文件覆盖包内默认）")
     report("log", msg=f"sitegen：{len(inputs)} 篇已勾选文章，开始生成…")
     rpt = build_site(inputs, cfg.spec,
                      assets_src=sg_kb.assets_dir(blog_dir),
+                     theme_dir=theme,
                      out_dir=blog_dir / _SITEGEN_OUT)
     report("log", msg=f"生成完成：文章 {rpt.posts}，文件 {rpt.files}，"
                       f"跳过 {len(rpt.skipped)}")

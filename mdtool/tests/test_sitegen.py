@@ -259,3 +259,72 @@ def test_render_post_date_fallback_mtime(tmp_path):
     b = render_post(PostInput(id=2, path=pm))
     assert a.date == datetime(2020, 1, 1, 0, 0, 0)
     assert b.date is not None and (datetime.now() - b.date).days <= 1
+
+
+# ── 主题：B/theme/ 逐文件覆盖包内默认（契约见 docs/博客主题定制.md）──
+
+def _one_post(tmp_path):
+    return [PostInput(id=1, path=_make_post(
+        tmp_path, "a.md",
+        "---\ntitle: 文章一\ndate: 2026-03-01 10:00:00\n---\n正文一\n"))]
+
+
+def test_render_copy_label_knob():
+    """复制按钮文案可配（site.json copy_label → spec.copy_label 一路透传）。"""
+    r = render_markdown("```py\nx=1\n```\n", copy_label="Copy")
+    assert ">Copy</button>" in r.html
+
+
+def test_theme_template_single_file_override(tmp_path):
+    """主题只放 index.html：首页走主题，文章页落回包内默认。"""
+    theme = tmp_path / "theme"
+    (theme / "templates").mkdir(parents=True)
+    (theme / "templates" / "index.html").write_text(
+        '{% extends "base.html" %}'
+        "{% block wrapper %}<p id=\"theme-marker\">主题首页</p>{% endblock %}",
+        encoding="utf-8")
+    out = tmp_path / "public"
+    build_site(_one_post(tmp_path), SiteSpec(title="t", url="https://x.example",
+                                             author="a"),
+               theme_dir=theme, out_dir=out)
+    assert 'id="theme-marker"' in (out / "index.html").read_text(encoding="utf-8")
+    # 未覆盖的模板不受影响
+    post_html = (out / "article" / "1.html").read_text(encoding="utf-8")
+    assert "文章一" in post_html and "theme-marker" not in post_html
+
+
+def test_theme_dir_without_subdirs_is_noop(tmp_path):
+    """theme/ 存在但没有 templates|static 子目录：等同默认主题。"""
+    theme = tmp_path / "theme"
+    theme.mkdir()
+    out = tmp_path / "public"
+    rpt = build_site(_one_post(tmp_path), SiteSpec(title="t", url="https://x.e",
+                                                   author="a"),
+                     theme_dir=theme, out_dir=out)
+    assert (out / "css" / "style.css").is_file()
+    assert "文章一" in (out / "index.html").read_text(encoding="utf-8")
+
+
+def test_theme_static_overlay_and_pygments_style(tmp_path):
+    """静态合并：主题同名覆盖、新文件照搬；pygments_style 换高亮主题。"""
+    from mdtool.core.sitegen.render import pygments_css
+
+    theme = tmp_path / "theme"
+    (theme / "static" / "css").mkdir(parents=True)
+    (theme / "static" / "js").mkdir(parents=True)
+    (theme / "static" / "css" / "style.css").write_text("/* 主题色 */\n",
+                                                        encoding="utf-8")
+    (theme / "static" / "js" / "extra.js").write_text("// 扩展\n",
+                                                      encoding="utf-8")
+    out = tmp_path / "public"
+    spec = SiteSpec(title="t", url="https://x.example", author="a",
+                    pygments_style="monokai")
+    build_site(_one_post(tmp_path), spec, theme_dir=theme, out_dir=out)
+    assert (out / "css" / "style.css").read_text(encoding="utf-8") == "/* 主题色 */\n"
+    assert (out / "js" / "extra.js").read_text(encoding="utf-8") == "// 扩展\n"
+    # 未被主题覆盖的包内静态仍在
+    assert (out / "js" / "site.js").is_file()
+    assert (out / "favicon.ico").is_file()
+    # pygments.css 按配置生成（主题仍可用同名文件再覆盖它）
+    assert (out / "css" / "pygments.css").read_text(encoding="utf-8") == \
+        pygments_css("monokai") + "\n"
