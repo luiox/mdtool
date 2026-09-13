@@ -85,6 +85,20 @@ def test_load_site_config_defaults_and_roundtrip(tmp_path):
     assert load_site_config(tmp_path).spec.title == tmp_path.name
 
 
+def test_load_site_config_bad_scalars_fall_back(tmp_path):
+    """per_page/feed_limit 手改坏值回退默认，不炸读取（与坏 JSON 同兜底）。"""
+    # 非数字字符串 → 默认；数字字符串照常解析（手改友好）
+    (tmp_path / "site.json").write_text(
+        json.dumps({"per_page": "ten", "feed_limit": "15"}), encoding="utf-8")
+    cfg = load_site_config(tmp_path)
+    assert cfg.spec.per_page == 10 and cfg.spec.feed_limit == 15
+    # falsy 值沿用 `or 默认` 原语义
+    (tmp_path / "site.json").write_text(
+        json.dumps({"per_page": 0, "feed_limit": None}), encoding="utf-8")
+    cfg = load_site_config(tmp_path)
+    assert cfg.spec.per_page == 10 and cfg.spec.feed_limit == 20
+
+
 def test_site_config_theme_key_and_theme_root(tmp_path):
     """theme 键：roundtrip、非法名回退默认、目录不存在时 theme_root=None。"""
     from mdtool.core.sitegen.kb import theme_root

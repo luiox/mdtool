@@ -4,7 +4,9 @@
 (function () {
   "use strict";
 
-  // 复制按钮：事件委托，文案反馈在此统一，CSS 只管样式
+  // 复制按钮：事件委托，反馈在此统一，CSS 只管样式。
+  // 首态文案由引擎按 site.json 的 copy_label 生成，还原取按钮自身首态，
+  // 故换 copy_label 无需覆盖本文件；只有"复制成功"反馈语写死在此。
   document.addEventListener("click", function (e) {
     var btn = e.target.closest(".code-copy-btn");
     if (!btn) return;
@@ -12,11 +14,12 @@
     var code = figure ? figure.querySelector("pre code") : null;
     if (!code) return;
     var text = code.innerText;
+    var initial = btn.textContent;
     var done = function () {
       btn.textContent = "复制成功";
       btn.classList.add("ok");
       setTimeout(function () {
-        btn.textContent = "复制";
+        btn.textContent = initial;
         btn.classList.remove("ok");
       }, 1500);
     };

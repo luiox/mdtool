@@ -58,6 +58,15 @@ def _clean_theme_name(v) -> str:
     return name
 
 
+def _int(v, default: int) -> int:
+    """site.json 标量 → int；坏值（非数字）回退默认——手改错字不该炸配置
+    读取，与"坏 JSON 回退默认"同一兜底语义。falsy 交给调用方的 ``or``。"""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def load_site_config(blog_dir: Path) -> SiteConfig:
     """读 site.json；缺失/坏 JSON 回退默认（title 用目录名），首建友好。"""
     data: dict = {}
@@ -76,8 +85,8 @@ def load_site_config(blog_dir: Path) -> SiteConfig:
             url=str(data.get("url") or "").rstrip("/"),
             author=str(data.get("author") or ""),
             language=str(data.get("language") or "zh-CN"),
-            per_page=int(data.get("per_page") or 10),
-            feed_limit=int(data.get("feed_limit") or 20),
+            per_page=_int(data.get("per_page") or 10, 10),
+            feed_limit=_int(data.get("feed_limit") or 20, 20),
             pygments_style=str(data.get("pygments_style") or "friendly"),
             copy_label=str(data.get("copy_label") or "复制"),
         ),
