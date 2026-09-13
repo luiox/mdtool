@@ -122,6 +122,36 @@ def test_run_git_deploy_no_change_skips_push(tmp_path):
     assert head.stdout.strip() == plan.message
 
 
+def test_run_git_deploy_first_run_clones_before_sync(tmp_path, monkeypatch):
+    """首次部署（部署克隆尚不存在）：克隆命令先于产物同步执行。
+
+    回归锁定：同步会把产物文件落进 deploy_dir，非空目录令 git clone
+    拒绝——次序颠倒时首发布必失败（2026-09-13 实测踩中）。
+    """
+    import subprocess
+    for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(var, "t" if var.endswith("NAME") else "t@t")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "index.html").write_text("v1", encoding="utf-8")
+    bare = tmp_path / "remote.git"
+    subprocess.run(("git", "init", "--bare", "-b", "main", str(bare)), check=True,
+                   capture_output=True)
+
+    deploy = tmp_path / "deploy"      # 不预建克隆——正是首次发布形态
+    plan = plan_git_deploy(out_dir=out, repo_url=str(bare), branch="main",
+                           deploy_dir=deploy)
+    done = run_git_deploy(plan, out_dir=out, report=lambda _s, **_kw: None)
+    assert done[0][0].startswith("$ git clone")
+    assert any(cmd.startswith("$ git push") for cmd, _rc in done)
+
+    verify = tmp_path / "verify"
+    subprocess.run(("git", "clone", "-q", str(bare), str(verify)), check=True,
+                   capture_output=True)
+    assert (verify / "index.html").read_text(encoding="utf-8") == "v1"
+
+
 # ── legacy deploy 配置解析 ───────────────────────────────────────────
 
 def test_load_legacy_deploy(tmp_path):
