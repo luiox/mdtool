@@ -43,8 +43,9 @@ class SiteSpec:
     """站点元信息（Hexo _config.yml 的 sitegen 对应物）。url 无尾斜杠。
 
     pygments_style/copy_label 是主题级 knobs（site.json 可改）：前者换
-    构建期高亮主题，后者换代码复制按钮文案（换文案须同步覆盖主题的
-    static/js/site.js，其反馈文案与首态一致）。
+    构建期高亮主题（非法名回退 friendly），后者换代码复制按钮文案（点击
+    还原按钮自身首态，无需动 JS；"复制成功"反馈语写死在包内 site.js，
+    换反馈语才须主题覆盖之）。
     """
 
     title: str

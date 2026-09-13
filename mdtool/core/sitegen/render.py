@@ -30,8 +30,9 @@ from pygments.util import ClassNotFound
 
 # TOC 收集的标题层级（hexo/jacman 的 TOC 深度习惯：h2-h4）
 _TOC_LEVELS = (2, 3, 4)
-# 复制按钮文案缺省值（site.json 可覆盖；站点 JS 的反馈文案与首态一致，
-# 主题换文案时须同步改 site.js，见 docs/博客主题定制.md 的渲染契约一节）
+# 复制按钮文案缺省值（site.json 可覆盖；站点 JS 点击后还原按钮自身首态
+# 文案，故换文案不需要动 JS——只有"复制成功"反馈语仍写死在 site.js，
+# 要换反馈语才须主题覆盖，见 docs/博客主题定制.md 的渲染契约一节）
 COPY_LABEL_DEFAULT = "复制"
 
 _PYGM_FORMATTER = HtmlFormatter(nowrap=True)
@@ -49,8 +50,16 @@ def highlight_code(code: str, lang: str) -> str:
 
 
 def pygments_css(style: str = "friendly") -> str:
-    """Pygments 高亮主题 CSS（构建期落成 css/pygments.css）。"""
-    return HtmlFormatter(style=style).get_style_defs(".codeblock")
+    """Pygments 高亮主题 CSS（构建期落成 css/pygments.css）。
+
+    未知主题名回退 friendly——site.json 手改错字不该中断整站构建，与
+    "单篇坏不拖垮整站"同一兜底哲学。
+    """
+    try:
+        formatter = HtmlFormatter(style=style)
+    except ClassNotFound:
+        formatter = HtmlFormatter(style="friendly")
+    return formatter.get_style_defs(".codeblock")
 
 
 @dataclass(frozen=True)

@@ -328,3 +328,10 @@ def test_theme_static_overlay_and_pygments_style(tmp_path):
     # pygments.css 按配置生成（主题仍可用同名文件再覆盖它）
     assert (out / "css" / "pygments.css").read_text(encoding="utf-8") == \
         pygments_css("monokai") + "\n"
+
+
+def test_pygments_css_unknown_style_falls_back():
+    """pygments_style 手改错字回退 friendly，不中断整站构建。"""
+    from mdtool.core.sitegen.render import pygments_css
+
+    assert pygments_css("no-such-style") == pygments_css("friendly")
