@@ -88,25 +88,47 @@ def sync_out_to_deploy(out_dir: Path, deploy_dir: Path) -> int:
     return count
 
 
+def _exec_step(step: DeployStep, report: Callable) -> int:
+    """执行单条部署命令：stdout 逐行 report、stderr 警告行；返回退出码。"""
+    report("log", msg=step.display)
+    proc = subprocess.run(step.argv, cwd=str(step.cwd), shell=False,
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    for line in (proc.stdout or "").splitlines():
+        report("log", msg=line)
+    err = (proc.stderr or "").strip()
+    if err:
+        report("log", msg=err, level="WARN")
+    return proc.returncode
+
+
 def run_git_deploy(plan: DeployPlan, *,
                    out_dir: Path,
                    report: Callable = lambda *_a, **_k: None) -> list[tuple[str, int]]:
     """同步产物并执行计划；返回已执行命令的 ``(display, rc)`` 列表。
 
-    ``git add -A`` 之后查 ``status --porcelain``：为空说明产物无变化，
-    跳过 commit/push（rc 视为 0 记为 no-op 行）。任一命令非零退出抛
-    RuntimeError 中止（克隆失败/推送被拒都不该静默继续）。
+    ``clone_first`` 时克隆命令先于产物同步执行——同步会把产物文件落进
+    deploy_dir，非空目录会令 ``git clone`` 拒绝（首次部署克隆尚不存在，
+    次序颠倒则首发布必失败）。``git add -A`` 之后查 ``status --porcelain``
+    为空说明产物无变化，跳过 commit/push（rc 视为 0 记为 no-op 行）。
+    任一命令非零退出抛 RuntimeError 中止（克隆失败/推送被拒都不该静默继续）。
     """
     done: list[tuple[str, int]] = []
+    steps = list(plan.steps)
     if plan.clone_first:
         # 克隆目标目录若存在非 git 残留（上次克隆失败），先清掉
         if plan.deploy_dir.exists() and any(plan.deploy_dir.iterdir()):
             shutil.rmtree(plan.deploy_dir)
         plan.deploy_dir.parent.mkdir(parents=True, exist_ok=True)
+        clone, steps = steps[0], steps[1:]
+        rc = _exec_step(clone, report)
+        done.append((clone.display, rc))
+        if rc != 0:
+            raise RuntimeError(f"部署命令失败（退出码 {rc}）: {clone.display}")
     synced = sync_out_to_deploy(out_dir, plan.deploy_dir)
     report("log", msg=f"产物同步完成：{synced} 个文件 → {plan.deploy_dir.name}/")
 
-    for step in plan.steps:
+    for step in steps:
         if step.argv[:2] == ("git", "commit"):
             probe = subprocess.run(
                 ("git", "status", "--porcelain"), cwd=str(plan.deploy_dir),
@@ -115,16 +137,8 @@ def run_git_deploy(plan: DeployPlan, *,
                 report("log", msg="产物无变更，跳过 commit / push")
                 done.append(("$ git commit (no changes)", 0))
                 break
-        report("log", msg=step.display)
-        proc = subprocess.run(step.argv, cwd=str(step.cwd), shell=False,
-                              capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
-        for line in (proc.stdout or "").splitlines():
-            report("log", msg=line)
-        err = (proc.stderr or "").strip()
-        if err:
-            report("log", msg=err, level="WARN")
-        done.append((step.display, proc.returncode))
-        if proc.returncode != 0:
-            raise RuntimeError(f"部署命令失败（退出码 {proc.returncode}）: {step.display}")
+        rc = _exec_step(step, report)
+        done.append((step.display, rc))
+        if rc != 0:
+            raise RuntimeError(f"部署命令失败（退出码 {rc}）: {step.display}")
     return done
